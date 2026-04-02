@@ -479,12 +479,17 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
 # KRA Edited: Includes new features and flags
 def get_rec_misc_atom_feat(bio_atom=None, atom_name=None, element=None, get_misc_features=False,
                             vdw_base=False, vdw_curv=False, vdw_vol=False):
+
+    # KRA edited: number of scalar features
+    vdw_count = sum([vdw_base, vdw_curv, vdw_vol])
     if get_misc_features:
-        return [safe_index(allowable_features['possible_amino_acids'], 'misc'),
+        atom_feat = [safe_index(allowable_features['possible_amino_acids'], 'misc'),
                  safe_index(allowable_features['possible_atomic_num_list'], 'misc'),
                  safe_index(allowable_features['possible_atom_type_2'], 'misc'),
-                 safe_index(allowable_features['possible_atom_type_3'], 'misc'),
-                 0.0] ##KRA edited - needs a default for the tensor logic to work
+                 safe_index(allowable_features['possible_atom_type_3'], 'misc')]
+        ## KRA edited - adds default zeroes per number of vdw flags
+        atom_feat.extend([0.0] * vdw_count)
+        return atom_feat
     if atom_name is not None:
         atom_name = atom_name
     else:
@@ -509,13 +514,13 @@ def get_rec_misc_atom_feat(bio_atom=None, atom_name=None, element=None, get_misc
         vdw_r = get_safe_residue_vdw(atomic_num)
         if vdw_base:
             vdw_base_feat = vdw_r - 1.60
-            atom_feats.append(vdw_base_feat)
+            atom_feat.append(vdw_base_feat)
         if vdw_curv:
             vdw_curv_feat = (1/vdw_r) - (1/1.60)
-            atom_feats.append(vdw_curv_feat)
+            atom_feat.append(vdw_curv_feat)
         if vdw_vol:
             vdw_vol_feat = (4/3)*(vdw_r**3) - (4/3)*(1.60**3)
-            atom_feats.append(vdw_vol_feat)
+            atom_feat.append(vdw_vol_feat)
     return atom_feat
 
 
