@@ -85,7 +85,7 @@ def parse_train_args():
     parser.add_argument('--merge_clusters', type=int, default=1, help='')
     parser.add_argument('--triple_training', action='store_true', default=False, help='')
     parser.add_argument('--crop_beyond', type=float, default=20, help='')
-    ## KRA additional argument for tpye of van der waals radius feature we want
+    ## KRA additional argument for type of van der waals radius feature we want
     parser.add_argument('--vdw_base', action='store_true', default=False, help='Flag to include vdw radius feature')
     parser.add_argument('--vdw_curv', action='store_true', default=False, help='Flag to include 1/vdw feature (curvature)')
     parser.add_argument('--vdw_vol', action='store_true', default=False, help='Flag to include (vdw)^3 feature (volume)')
