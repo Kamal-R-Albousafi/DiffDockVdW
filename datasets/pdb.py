@@ -134,7 +134,7 @@ def compute_cg_features(aa, aa_smile):
     mol = Chem.MolFromSmiles(aa_smile)
 
     complex_graph = HeteroData()
-    get_lig_graph(mol, complex_graph)
+    get_lig_graph(mol, complex_graph, vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
     atoms_to_keep = torch.tensor([i for i, _ in cg_rdkit_indices[aa].items()]).long()
     complex_graph['ligand', 'ligand'].edge_index, complex_graph['ligand', 'ligand'].edge_attr = \
@@ -355,7 +355,7 @@ class PDBSidechain(Dataset):
                         print(e, "changing ligand")
 
             lig_graph = HeteroData()
-            get_lig_graph(mol, lig_graph)
+            get_lig_graph(mol, lig_graph, vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
             edge_mask, mask_rotate = get_transformation_mask(lig_graph)
             lig_graph['ligand'].edge_mask = torch.tensor(edge_mask)
@@ -513,7 +513,7 @@ class PDBSidechain(Dataset):
                                            max_neighbors=self.c_alpha_max_neighbors, knn_only_graph=self.knn_only_graph,
                                            all_atoms=self.all_atoms, atom_cutoff=self.atom_radius,
                                            atom_max_neighbors=self.atom_max_neighbors,
-                                           self.vdw_base, self.vdw_curv, self.vdw_vol)
+                                           vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
         except Exception as e:
             print("Error in extracting receptor", chain)
             print(e)

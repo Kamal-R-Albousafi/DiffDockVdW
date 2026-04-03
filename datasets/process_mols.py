@@ -224,7 +224,7 @@ def moad_extract_receptor_structure(path, complex_graph, neighbor_cutoff=20, max
     new_extract_receptor_structure(seq, coords, complex_graph, neighbor_cutoff=neighbor_cutoff, max_neighbors=max_neighbors,
                                    lm_embeddings=lm_embeddings, knn_only_graph=knn_only_graph, all_atoms=all_atoms,
                                    atom_cutoff=atom_cutoff, atom_max_neighbors=atom_max_neighbors,
-                                   vdw_base, vdw_curv, vdw_vol)
+                                   vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
 
 # Need to put here to pass into moad_atom_feats and misc
@@ -299,7 +299,7 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
                 atom_dst_list.extend(dst)
             atoms_edge_index = torch.from_numpy(np.asarray([atom_dst_list, atom_src_list]))
         
-        feats = [get_moad_atom_feats(res, all_coords[i], vdw_base, vdw_curv, vdw_vol) for i, res in enumerate(seq)]
+        feats = [get_moad_atom_feats(res, all_coords[i], vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol) for i, res in enumerate(seq)]
         atom_feat = torch.from_numpy(np.concatenate(feats, axis=0)).float()
         c_alpha_idx = np.concatenate([np.zeros(len(f)) + i for i, f in enumerate(feats)])
         np_array = np.stack([np.arange(len(atom_feat)), c_alpha_idx])
@@ -370,7 +370,7 @@ def get_moad_atom_feats(res, coords, vdw_base=False, vdw_curv=False, vdw_vol=Fal
 
 
 def get_lig_graph(mol, complex_graph, vdw_base=False, vdw_curv=False, vdw_vol=False):
-    atom_feats = lig_atom_featurizer(mol, vdw_base, vdw_curv, vdw_vol)
+    atom_feats = lig_atom_featurizer(mol, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
     row, col, edge_type = [], [], []
     for bond in mol.GetBonds():
@@ -413,7 +413,8 @@ def generate_conformer(mol):
     return False
 
 
-def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, remove_hs, tries=10, skip_matching=False):
+def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, 
+                                remove_hs, tries=10, skip_matching=False, vdw_base=False, vdw_curv=False, vdw_vol=False):
     if matching:
         mol_maybe_noh = copy.deepcopy(mol_)
         if remove_hs:
@@ -459,7 +460,7 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
             mol_rdkit = mols[np.argmin(rmsds)]
             if i == 0:
                 complex_graph.rmsd_matching = min(rmsds)
-                get_lig_graph(mol_rdkit, complex_graph)
+                get_lig_graph(mol_rdkit, complex_graph, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
             else:
                 if torch.is_tensor(complex_graph['ligand'].pos):
                     complex_graph['ligand'].pos = [complex_graph['ligand'].pos]
@@ -468,7 +469,7 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
     else:  # no matching
         complex_graph.rmsd_matching = 0
         if remove_hs: mol_ = RemoveHs(mol_)
-        get_lig_graph(mol_, complex_graph)
+        get_lig_graph(mol_, complex_graph, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
     edge_mask, mask_rotate = get_transformation_mask(complex_graph)
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)

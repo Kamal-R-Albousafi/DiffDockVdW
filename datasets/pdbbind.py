@@ -382,7 +382,7 @@ class PDBBind(Dataset):
             complex_graph['name'] = name
             get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
                                         self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries,
-                                        self.vdw_base, self.vdw_curv, self.vdw_vol)
+                                        vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
             moad_extract_receptor_structure(path=os.path.join(self.pdbbind_dir, name, f'{name}_{self.protein_file}.pdb'),
                                             complex_graph=complex_graph,
@@ -393,7 +393,7 @@ class PDBBind(Dataset):
                                             all_atoms=self.all_atoms,
                                             atom_cutoff=self.atom_radius,
                                             atom_max_neighbors=self.atom_max_neighbors,
-                                            self.vdw_base, self.vdw_curv, self.vdw_vol)
+                                            vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')

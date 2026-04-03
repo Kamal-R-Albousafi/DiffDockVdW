@@ -401,7 +401,7 @@ class MOAD(Dataset):
                                             max_neighbors=self.c_alpha_max_neighbors, sequences_to_embeddings=sequences_to_embeddings,
                                             knn_only_graph=self.knn_only_graph, all_atoms=self.all_atoms, atom_cutoff=self.atom_radius,
                                             atom_max_neighbors=self.atom_max_neighbors,
-                                            self.vdw_base, self.vdw_curv, self.vdw_vol)
+                                            vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')
@@ -495,7 +495,7 @@ class MOAD(Dataset):
             Chem.SanitizeMol(lig)
             get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
                                         self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries, skip_matching=self.skip_matching,
-                                        self.vdw_base, self.vdw_curv, self.vdw_vol)
+                                        vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
         except Exception as e:
             print(f'Skipping {name} because of the error:')
             print(e)
