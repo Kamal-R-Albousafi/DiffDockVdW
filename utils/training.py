@@ -295,10 +295,104 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
                                                          t_schedule=t_schedule)
             except Exception as e:
                 failed_convergence_counter += 1
+                # Extract the name safely
+                complex_name = "Unknown"
+                if hasattr(orig_complex_graph, 'name'):
+                    complex_name = orig_complex_graph.name
+                elif 'name' in orig_complex_graph:
+                    complex_name = orig_complex_graph['name']
+                
                 if failed_convergence_counter > 5:
-                    print('failed 5 times - skipping the complex')
+                    print(f'failed 5 times - skipping complex: {complex_name}')
                     break
-                print("Exception while running inference on complex:", e)
+                
+                print(f"Exception while running inference on complex {complex_name}: {e}")
+        if failed_convergence_counter > 5:
+            rmsds.extend([100] * args.inference_samples)
+            min_rmsds.append(100)
+            continue
+
+        if args.no_torsion:
+            orig_complex_graph['ligand'].orig_pos = (orig_complex_graph[
+                                                         'ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy())
+
+        filterHs = torch.not_equal(predictions_list[0]['ligand'].x[:, 0], 0).cpu().numpy()
+
+        if isinstance(orig_complex_graph['ligand'].orig_pos, list):
+            orig_complex_graph['ligand'].orig_pos = orig_complex_graph['ligand'].orig_pos[0]
+        # if len(orig_complex_graph['ligand'].orig_pos.shape) == 3:
+        #     orig_complex_graph['ligand'].orig_pos = orig_complex_graph['ligand'].orig_pos[0]
+
+        ligand_pos = np.asarray(
+            [complex_graph['ligand'].pos.cpu().numpy()[filterHs] for complex_graph in predictions_list])
+        if len(orig_complex_graph['ligand'].orig_pos.shape) == 2:
+            orig_complex_graph['ligand'].orig_pos = orig_complex_graph['ligand'].orig_pos[None, :, :]
+        try:
+            orig_ligand_pos = orig_complex_graph['ligand'].orig_pos[:, filterHs] - orig_complex_graph.original_center.cpu().numpy()
+        except Exception as e:
+            print("problem with orig_pos which is of shape:", orig_complex_graph['ligand'].orig_pos.shape, e)
+            continue
+        mol = RemoveAllHs(orig_complex_graph.mol[0])
+        complex_rmsds = []
+        for i in range(len(orig_ligand_pos)):
+            try:
+                rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
+            except Exception as e:
+                print("Using non corrected RMSD because of the error:", e)
+                rmsd = np.sqrt(((ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=2).mean(axis=1))
+            complex_rmsds.append(rmsd)
+        complex_rmsds = np.asarray(complex_rmsds)
+        rmsd = np.min(complex_rmsds, axis=0)
+        
+        rmsds.extend([r for r in rmsd])
+        min_rmsds.append(rmsd.min(axis=0))
+
+    rmsds = np.array(rmsds)
+    min_rmsds = np.array(min_rmsds)
+    losses = {'rmsds_lt2': (100 * (rmsds < 2).sum() / len(rmsds)),
+              'rmsds_lt5': (100 * (rmsds < 5).sum() / len(rmsds)),
+              'min_rmsds_lt2': (100 * (min_rmsds < 2).sum() / len(min_rmsds)),
+              'min_rmsds_lt5': (100 * (min_rmsds < 5).sum() / len(min_rmsds)),}
+    return losses
+
+
+def inference_epoch_fix_par_version(model, complex_graphs, device, t_to_sigma, args):
+    t_schedule = get_t_schedule(sigma_schedule='expbeta', inference_steps=args.inference_steps,
+                                inf_sched_alpha=1, inf_sched_beta=1)
+    tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
+
+    dataset = ListDataset(complex_graphs)
+    loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False)
+    rmsds, min_rmsds = [], []
+
+    for orig_complex_graph in tqdm(loader):
+        data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
+        randomize_position(data_list, args.no_torsion, False, args.tr_sigma_max)
+
+        predictions_list = None
+        failed_convergence_counter = 0
+        while predictions_list == None:
+            try:
+                predictions_list, confidences = sampling(data_list=data_list, model=model.module if device.type == 'cuda' else model,
+                                                         inference_steps=args.inference_steps,
+                                                         tr_schedule=tr_schedule, rot_schedule=rot_schedule,
+                                                         tor_schedule=tor_schedule,
+                                                         device=device, t_to_sigma=t_to_sigma, model_args=args,
+                                                         t_schedule=t_schedule)
+            except Exception as e:
+                failed_convergence_counter += 1
+                # Extract the name safely
+                complex_name = "Unknown"
+                if hasattr(orig_complex_graph, 'name'):
+                    complex_name = orig_complex_graph.name
+                elif 'name' in orig_complex_graph:
+                    complex_name = orig_complex_graph['name']
+                
+                if failed_convergence_counter > 5:
+                    print(f'failed 5 times - skipping complex: {complex_name}')
+                    break
+                
+                print(f"Exception while running inference on complex {complex_name}: {e}")
         if failed_convergence_counter > 5:
             rmsds.extend([100] * args.inference_samples)
             min_rmsds.append(100)
