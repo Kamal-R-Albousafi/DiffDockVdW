@@ -95,6 +95,11 @@ parser.add_argument('--embedding_scale', type=int, default=10000, help='')
 parser.add_argument('--confidence_no_batchnorm', action='store_true', default=False, help='')
 parser.add_argument('--confidence_dropout', type=float, default=0.0, help='MLP dropout in confidence readout')
 
+# KRA edited: additional arguments for type of van der waals radius feature we want in confidence model
+parser.add_argument('--vdw_base', action='store_true', default=False, help='Flag to include vdw radius feature')
+parser.add_argument('--vdw_curv', action='store_true', default=False, help='Flag to include 1/vdw feature (curvature)')
+parser.add_argument('--vdw_vol', action='store_true', default=False, help='Flag to include (vdw)^3 feature (volume)')
+
 args = parser.parse_args()
 if args.config:
     config_dict = yaml.load(args.config, Loader=yaml.FullLoader)
@@ -108,18 +113,76 @@ if args.config:
     args.config = args.config.name
 assert(args.main_metric_goal == 'max' or args.main_metric_goal == 'min')
 
+# Debugger function
+def check_hetero_nan(data):
+    """Checks every tensor in a HeteroData object for NaNs or Infs."""
+    if isinstance(data, list):
+        for i, graph in enumerate(data):
+            is_bad, reason = check_hetero_nan(graph) # Recursive call
+            if is_bad:
+                # Add the list index to the reason for better debugging
+                return True, f"Graph index {i} in list: {reason}"
+        return False, None
+    # Handle both single HeteroData and Batches
+    # .items() iterates through (key, value) pairs where value is a Node/Edge/Global store
+    for store in data.stores:
+        for attr, value in store.items():
+            if torch.is_tensor(value) and torch.is_floating_point(value):
+                if not torch.isfinite(value).all():
+                    # Get the store type (node type or edge type) for better logging
+                    store_name = getattr(store, '_key', 'global')
+                    return True, f"Issue in {store_name} attribute '{attr}'"
+    return False, None
+
 def train_epoch(model, loader, optimizer, rmsd_prediction):
     model.train()
     meter = AverageMeter(['confidence_loss'])
 
     for data in tqdm(loader, total=len(loader)):
-        if device.type == 'cuda' and len(data) % torch.cuda.device_count() == 1 or device.type == 'cpu' and data.num_graphs == 1:
-            print("Skipping batch of size 1 since otherwise batchnorm would not work.")
+    # KRA Edited: New procedure to check batch samples before passing them into the cross entropy loss model
+        # 1. Sanitize the list (Remove nulls/nones/missing labels)
+        # This ensures 'pred' and 'labels' will always have matching dimensions
+        if isinstance(data, list):
+            data = [
+                g for g in data 
+                if g is not None 
+                and hasattr(g, 'y') 
+                and hasattr(g, 'rmsd') 
+                and torch.isfinite(g.rmsd).all()
+            ]
+        
+        # 2. Check size after filtering
+        # If the whole batch was null samples, skip it
+        if len(data) == 0:
+            print("| SKIP: Batch was entirely composed of null samples.")
+            continue
+
+        if (device.type == 'cuda' and len(data) % torch.cuda.device_count() == 1) or (device.type == 'cpu' and len(data) == 1):
+            print(f"Skipping batch of sanitized size {len(data)} to protect BatchNorm.")
+            continue
+
         optimizer.zero_grad()
+
+        # 3. Remove side_chain_vecs attribute (was causing errors)
+        for g in data:
+            if 'receptor' in g.node_types and hasattr(g['receptor'], 'side_chain_vecs'):
+                del g['receptor'].side_chain_vecs
+
+        # 4. Final NA Check
+        is_bad, reason = check_hetero_nan(data)
+        if is_bad:
+            print(f"| DATA PROBLEM: {reason} - Skipping")
+            continue
+        
         try:
-            pred = model(data)
-            print(f"DEBUG: Type of pred: {type(pred)}, Type of labels: {type(labels)}")
-            pred = model(data)
+            # KRA Edited: authors included an atom confidence, we do not use it, so to ensure the tuple logic
+            # we use a dummy placeholder for the second output of aamodel in confidence mode
+            # (can be seen in forward definition in aa and cg model py files)
+            pred, atom_pred = model(data)
+            # DEBUG: check output
+            if torch.isnan(pred).any():
+                print("| WARNING: NaN detected in model predictions !!! Skipping batch")
+                continue
             if rmsd_prediction:
                 labels = torch.cat([graph.rmsd for graph in data]).to(device) if isinstance(data, list) else data.rmsd
                 confidence_loss = F.mse_loss(pred, labels)
@@ -152,9 +215,44 @@ def test_epoch(model, loader, rmsd_prediction):
     meter = AverageMeter(['loss'], unpooled_metrics=True) if rmsd_prediction else AverageMeter(['confidence_loss', 'accuracy', 'ROC AUC'], unpooled_metrics=True)
     all_labels = []
     for data in tqdm(loader, total=len(loader)):
+        # KRA Edited: Identical sanitization and checking logic to above applied here
+        if isinstance(data, list):
+            data = [
+                g for g in data 
+                if g is not None 
+                and hasattr(g, 'y') 
+                and hasattr(g, 'rmsd') 
+                and torch.isfinite(g.rmsd).all()
+            ]
+
+        if len(data) == 0:
+            print("| SKIP: Batch was entirely composed of invalid 'ghost' samples.")
+            continue
+
+        if (device.type == 'cuda' and len(data) % torch.cuda.device_count() == 1) or \
+        (device.type == 'cpu' and len(data) == 1):
+            print(f"Skipping batch of sanitized size {len(data)} to protect BatchNorm.")
+            continue
+
+        optimizer.zero_grad()
+
+        
+        for g in data:
+            if 'receptor' in g.node_types and hasattr(g['receptor'], 'side_chain_vecs'):
+                del g['receptor'].side_chain_vecs
+
+        is_bad, reason = check_hetero_nan(data)
+        if is_bad:
+            print(f"| DATA PROBLEM: {reason} - Skipping")
+            continue
         try:
             with torch.no_grad():
-                pred = model(data)
+                # KRA Edited: dummy atom_pred 
+                pred, atom_pred = model(data)
+                # DEBUG: check output
+                if torch.isnan(pred).any():
+                    print("| WARNING: NaN detected in model predictions !!! Skipping batch")
+                    continue
             affinity_loss = torch.tensor(0.0, dtype=torch.float, device=pred[0].device)
             accuracy = torch.tensor(0.0, dtype=torch.float, device=pred[0].device)
             if rmsd_prediction:
