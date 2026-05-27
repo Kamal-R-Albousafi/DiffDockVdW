@@ -35,6 +35,8 @@ from utils.sampling import randomize_position, sampling
 from utils.utils import get_model
 from utils.visualise import PDBFile
 from tqdm import tqdm
+# import sys
+# sys.stdout.reconfigure(line_buffering=True)
 
 if os.name != 'nt':  # The line does not work on Windows
     import resource
@@ -58,7 +60,9 @@ REMOTE_URLS = [f"{REPOSITORY_URL}/releases/latest/download/diffdock_models.zip",
 def get_parser():
     parser = ArgumentParser()
     
-    parser.add_argument('--config', type=FileType(mode='r'), default='default_inference_args.yaml')
+    # KRA Edited: Changed default to None to ensure do not accidentally pass the wrong arguments
+    # The main important ones being the optimized temperature values
+    parser.add_argument('--config', type=FileType(mode='r'), default=None)
     parser.add_argument('--protein_ligand_csv', type=str, default=None, help='Path to a .csv file specifying the input as described in the README. If this is not None, it will be used instead of the --protein_path, --protein_sequence and --ligand parameters')
     parser.add_argument('--complex_name', type=str, default=None, help='Name that the complex will be saved with')
     parser.add_argument('--protein_path', type=str, default=None, help='Path to the protein file')
@@ -70,6 +74,8 @@ def get_parser():
 
     parser.add_argument('-l', '--log', '--loglevel', type=str, default='INFO', dest="loglevel", help='Log level. Default %(default)s')
     parser.add_argument('--esm_embeddings_path', type=str, default=None, help='If this is set then the LM embeddings at that path will be used for the receptor features')
+    # KRA: added argument to aid with aa model functionality on inference.py
+    parser.add_argument('--lm_embeddings', action='store_true', default=False, help='If this is set, LM embeddings will be used')
 
     parser.add_argument('--out_dir', type=str, default='results/user_inference', help='Directory where the outputs will be written to')
     parser.add_argument('--save_visualisation', action='store_true', default=False, help='Save a pdb file with all of the steps of the reverse diffusion')
@@ -82,12 +88,12 @@ def get_parser():
     parser.add_argument('--confidence_ckpt', type=str, default='best_model_epoch75.pt', help='Checkpoint to use for the confidence model')
 
     parser.add_argument('--batch_size', type=int, default=10, help='')
-    parser.add_argument('--no_final_step_noise', action='store_true', default=True, help='Use no noise in the final step of the reverse diffusion')
+    parser.add_argument('--no_final_step_noise', action='store_true', default=False, help='Use no noise in the final step of the reverse diffusion')
     parser.add_argument('--inference_steps', type=int, default=20, help='Number of denoising steps')
     parser.add_argument('--actual_steps', type=int, default=None, help='Number of denoising steps that are actually performed')
 
     parser.add_argument('--old_score_model', action='store_true', default=False, help='')
-    parser.add_argument('--old_confidence_model', action='store_true', default=True, help='')
+    parser.add_argument('--old_confidence_model', action='store_true', default=False, help='')
     parser.add_argument('--initial_noise_std_proportion', type=float, default=-1.0, help='Initial noise std proportion')
     parser.add_argument('--choose_residue', action='store_true', default=False, help='')
 
@@ -184,33 +190,37 @@ def main(args):
     complex_name_list = [name if name is not None else f"complex_{i}" for i, name in enumerate(complex_name_list)]
 
     # preprocessing of complexes into geometric graphs
+    # KRA Edited: added an additional yaml argument for whether we use lm embeddings, using the all atoms model
+    # we did not use these, so they will not be meaningful at inference time
     test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
                                     ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
-                                    lm_embeddings=True,
+                                    lm_embeddings=args.lm_embeddings,
                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
                                     all_atoms=score_model_args.all_atoms, atom_radius=score_model_args.atom_radius,
                                     atom_max_neighbors=score_model_args.atom_max_neighbors,
                                     precomputed_lm_embeddings=args.esm_embeddings_path,
-                                    knn_only_graph=False if not hasattr(score_model_args, 'not_knn_only_graph') else not score_model_args.not_knn_only_graph)
+                                    knn_only_graph=False if not hasattr(score_model_args, 'not_knn_only_graph') else not score_model_args.not_knn_only_graph,
+                                    vdw_base=score_model_args.vdw_base, vdw_curv=score_model_args.vdw_curv, vdw_vol=score_model_args.vdw_vol)
     test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
 
-    if args.confidence_model_dir is not None and not confidence_args.use_original_model_cache:
-        logger.info('Confidence model uses different type of graphs than the score model. '
-                    'Loading (or creating if not existing) the data for the confidence model now.')
-        confidence_test_dataset = \
-            InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
-                             ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
-                             lm_embeddings=True,
-                             receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
-                             c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
-                             all_atoms=confidence_args.all_atoms, atom_radius=confidence_args.atom_radius,
-                             atom_max_neighbors=confidence_args.atom_max_neighbors,
-                             precomputed_lm_embeddings=test_dataset.lm_embeddings,
-                             knn_only_graph=False if not hasattr(score_model_args, 'not_knn_only_graph') else not score_model_args.not_knn_only_graph)
-    else:
-        confidence_test_dataset = None
-
+    # if args.confidence_model_dir is not None and not confidence_args.use_original_model_cache:
+    #     logger.info('Confidence model uses different type of graphs than the score model. '
+    #                 'Loading (or creating if not existing) the data for the confidence model now.')
+    #     confidence_test_dataset = \
+    #         InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
+    #                          ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
+    #                          lm_embeddings=False,
+    #                          receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
+    #                          c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
+    #                          all_atoms=confidence_args.all_atoms, atom_radius=confidence_args.atom_radius,
+    #                          atom_max_neighbors=confidence_args.atom_max_neighbors,
+    #                          precomputed_lm_embeddings=test_dataset.lm_embeddings,
+    #                          knn_only_graph=False if not hasattr(score_model_args, 'not_knn_only_graph') else not score_model_args.not_knn_only_graph,
+    #                          vdw_base=score_model_args.vdw_base, vdw_curv=score_model_args.vdw_curv, vdw_vol=score_model_args.vdw_vol)
+    # else:
+    #     confidence_test_dataset = None
+    confidence_test_dataset = None # KRA Edited: the logic above was doing more harm than good
     t_to_sigma = partial(t_to_sigma_compl, args=score_model_args)
 
     model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
@@ -237,7 +247,7 @@ def main(args):
     test_ds_size = len(test_dataset)
     logger.info(f'Size of test dataset: {test_ds_size}')
     data = [] # initialize dataframe for csv writing
-    num_to_save = 2 # number of sdfs to save
+    num_to_save = 1 # number of sdfs to save # TODO: make this a parser argument
     for idx, orig_complex_graph in tqdm(enumerate(test_loader), total=len(test_loader), ascii=True):
         if not orig_complex_graph.success[0]:
             skipped += 1
@@ -319,10 +329,10 @@ def main(args):
                 
                 # Only write molecule for top N, and put it into folder based on CID name
                 if rank <= num_to_save - 1:
-                    file_name = f'VS_DD_{molName}_rank{rank+1}_confidence{confidence[rank]:.2f}.sdf'
-                    folder_path = os.path.join(args.out_dir, molName)
+                    file_name = f'{molName}_rank{rank+1}_confidence{confidence[rank]:.2f}.sdf' 
+                    folder_path = os.path.join(args.out_dir, molName) if args.seperate_dirs else args.out_dir
                     file_path = os.path.join(folder_path, file_name)
-                    os.makedirs(folder_path, exist_ok=True)
+                    if args.seperate_dirs: os.makedirs(folder_path, exist_ok=True)
                     # write_mol_with_coords(mol_pred, pos, os.path.join(args.out_dir, molName, protein_name, f'VS_DD_{molName}_rank{rank+1}_confidence{confidence[rank]:.2f}.sdf'))
                     write_mol_with_coords(mol_pred, pos, file_path)
                 data.append({
@@ -332,6 +342,8 @@ def main(args):
                 })
             # save visualisation frames
             if args.save_visualisation:
+                write_dir = os.path.join(args.out_dir, 'visualizations')
+                os.makedirs(write_dir, exist_ok=True)
                 if confidence is not None:
                     for rank, batch_idx in enumerate(re_order):
                         visualization_list[batch_idx].write(os.path.join(write_dir, f'rank{rank+1}_reverseprocess.pdb'))
