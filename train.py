@@ -108,27 +108,71 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                  args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value):
             best_val_inference_value = logs[args.inference_earlystop_metric]
             best_val_inference_epoch = epoch
-            torch.save(state_dict, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
+            if args.save_optim:
+                torch.save({
+                    'epoch': epoch,
+                    'model': state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                }, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
+            else:
+                torch.save(state_dict, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
             if epoch > freeze_params:
-                torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_inference_epoch_model.pt'))
+                if args.save_optim:
+                    torch.save({
+                    'epoch': epoch,
+                    'model': ema_state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                }, os.path.join(run_dir, 'best_ema_inference_epoch_model.pt'))
+                else:
+                    torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_inference_epoch_model.pt'))
 
         if args.inference_secondary_metric is not None and args.inference_secondary_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_secondary_metric] <= best_val_secondary_value or
                  args.inference_earlystop_goal == 'max' and logs[args.inference_secondary_metric] >= best_val_secondary_value):
             best_val_secondary_value = logs[args.inference_secondary_metric]
             if epoch > freeze_params:
-                torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_secondary_epoch_model.pt'))
+                if args.save_optim:
+                    torch.save({
+                    'epoch': epoch,
+                    'model': ema_state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                }, os.path.join(run_dir, 'best_ema_secondary_epoch_model.pt'))
+                else:
+                    torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_secondary_epoch_model.pt'))
 
         if val_losses['loss'] <= best_val_loss:
             best_val_loss = val_losses['loss']
             best_epoch = epoch
-            torch.save(state_dict, os.path.join(run_dir, 'best_model.pt'))
+            # KRA Edited: save optimizer state based on parser argument
+            if args.save_optim:
+                torch.save({
+                    'epoch': epoch,
+                    'model': state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                }, os.path.join(run_dir, 'best_model.pt'))
+            else: 
+                torch.save(state_dict, os.path.join(run_dir, 'best_model.pt'))
             if epoch > freeze_params:
-                torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_model.pt'))
-
+                if args.save_optim:
+                    torch.save({
+                    'epoch': epoch,
+                    'model': ema_state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                }, os.path.join(run_dir, 'best_ema_model.pt'))
+                else:
+                    torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_model.pt'))
+        
         if args.save_model_freq is not None and (epoch + 1) % args.save_model_freq == 0:
             shutil.copyfile(os.path.join(run_dir, 'best_model.pt'),
                             os.path.join(run_dir, f'epoch{epoch+1}_best_model.pt'))
+            if epoch > freeze_params:
+                shutil.copyfile(os.path.join(run_dir, 'best_ema_model.pt'),
+                            os.path.join(run_dir, f'epoch{epoch+1}_best_ema_model.pt'))
 
         if scheduler:
             if epoch < freeze_params or (args.scheduler == 'linear_warmup' and epoch < args.warmup_dur):
