@@ -18,9 +18,12 @@ from tqdm import tqdm
 from datasets.pdbbind import PDBBind
 from utils.diffusion_utils import get_t_schedule
 from utils.sampling import randomize_position, sampling
-from utils.utils import get_model
+from utils.utils import get_model, read_strings_from_txt
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl
-
+from utils.molecules_utils import get_symmetry_rmsd
+from rdkit.Chem import RemoveAllHs
+import sys
+sys.stdout.reconfigure(line_buffering=True)
 
 class ListDataset(Dataset):
     def __init__(self, list):
@@ -39,12 +42,48 @@ def get_cache_path(args, split):
         cache_path += '_torsion'
     if args.all_atoms:
         cache_path += '_allatoms'
+    args.esm_embeddings_path = None # for some reason the yaml file did not save this
     split_path = args.split_train if split == 'train' else args.split_val
-    cache_path = os.path.join(cache_path, f'limit{args.limit_complexes}_INDEX{os.path.splitext(os.path.basename(split_path))[0]}_maxLigSize{args.max_lig_size}_H{int(not args.remove_hs)}_recRad{args.receptor_radius}_recMax{args.c_alpha_max_neighbors}'
+    # KRA Edited: resolved bug--cache paths have a leading dataset identifier and a number (from datasets.pdbbind.py)
+    dataset_name = ''
+    if args.dataset == 'pdbbind': 
+        dataset_name = 'PDBBind3'
+        # Hard coded: # TODO fix
+        protein_file = 'protein_processed'
+        protein_path_list = ligand_descriptions = None
+        matching_tries = None
+        keep_local_structures = False
+        fixed_knn_radius_graph = True
+        knn_only_graph = True
+        use_old_wrong_embedding_order = False
+        cache_path = os.path.join(cache_path, f'{dataset_name}_limit{args.limit_complexes}'
+                                                        f'_INDEX{os.path.splitext(os.path.basename(split_path))[0]}'
+                                                        f'_maxLigSize{args.max_lig_size}_H{int(not args.remove_hs)}'
+                                                        f'_recRad{args.receptor_radius}_recMax{args.c_alpha_max_neighbors}'
+                                                        f'_chainCutoff{args.chain_cutoff if args.chain_cutoff is None else int(args.chain_cutoff)}'
+                                            + ('' if not args.all_atoms else f'_atomRad{args.atom_radius}_atomMax{args.atom_max_neighbors}')
+                                            + ('' if args.no_torsion or args.num_conformers == 1 else f'_confs{args.num_conformers}')
+                                            + ('' if args.esm_embeddings_path is None else f'_esmEmbeddings')
+                                            + '_full'
+                                            + ('' if not keep_local_structures else f'_keptLocalStruct')
+                                            + ('' if protein_path_list is None or ligand_descriptions is None else str(binascii.crc32(''.join(ligand_descriptions + protein_path_list).encode())))
+                                            + ('' if protein_file == "protein_processed" else '_' + protein_file)
+                                            + ('' if not fixed_knn_radius_graph else (f'_fixedKNN' if not knn_only_graph else '_fixedKNNonly'))
+                                            + ('' if not args.include_miscellaneous_atoms else '_miscAtoms')
+                                            + ('' if use_old_wrong_embedding_order else '_chainOrd')
+                                            + ('' if args.matching_tries == 1 else f'_tries{matching_tries}')
+                                            + ('' if not args.vdw_base else '_vdwbase')
+                                            + ('' if not args.vdw_curv else '_vdwcurv')
+                                            + ('' if not args.vdw_vol else '_vdwvol'))
+    # else if args.dataset == 'moad': dataset_name = 'MOAD12':
+    #     # TODO
+    else:
+         cache_path = os.path.join(cache_path, f'{dataset_name}_limit{args.limit_complexes}_INDEX{os.path.splitext(os.path.basename(split_path))[0]}_maxLigSize{args.max_lig_size}_H{int(not args.remove_hs)}_recRad{args.receptor_radius}_recMax{args.c_alpha_max_neighbors}'
                                        + ('' if not args.all_atoms else f'_atomRad{args.atom_radius}_atomMax{args.atom_max_neighbors}')
                                        + ('' if args.no_torsion or args.num_conformers == 1 else
                                            f'_confs{args.num_conformers}')
                               + ('' if args.esm_embeddings_path is None else f'_esmEmbeddings'))
+    
     return cache_path
 
 def get_args_and_cache_path(original_model_dir, split):
@@ -74,6 +113,14 @@ class ConfidenceDataset(Dataset):
         self.cache_creation_id = cache_creation_id
         self.samples_per_complex = samples_per_complex
         self.model_ckpt = model_ckpt
+        # KRA: updated path logic for the cache loader
+        if split == 'train':
+            self.split_path = args.split_train
+        elif split == 'val':
+            self.split_path = args.split_val
+        else:
+            print('ERROR: no split detected, returning null for split path')
+            self.split_path = ''
 
         self.original_model_args, original_model_cache = get_args_and_cache_path(original_model_dir, split)
         self.complex_graphs_cache = original_model_cache if self.use_original_model_cache else get_cache_path(args, split)
@@ -90,7 +137,7 @@ class ConfidenceDataset(Dataset):
         # load the graphs that the confidence model will use
         print('Using the cached complex graphs of the original model args' if self.use_original_model_cache else 'Not using the cached complex graphs of the original model args. Instead the complex graphs are used that are at the location given by the dataset parameters given to confidence_train.py')
         print(self.complex_graphs_cache)
-        if not os.path.exists(os.path.join(self.complex_graphs_cache, "heterographs.pkl")):
+        if not os.path.exists(os.path.join(self.complex_graphs_cache, "heterographs.pkl")) and not os.path.exists(os.path.join(self.complex_graphs_cache, "heterographs0.pkl")):
             print(f'HAPPENING | Complex graphs path does not exist yet: {os.path.join(self.complex_graphs_cache, "heterographs.pkl")}. For that reason, we are now creating the dataset.')
             PDBBind(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes,
                     receptor_radius=args.receptor_radius,
@@ -107,8 +154,21 @@ class ConfidenceDataset(Dataset):
                     require_ligand=True)
 
         print(f'HAPPENING | Loading complex graphs from: {os.path.join(self.complex_graphs_cache, "heterographs.pkl")}')
-        with open(os.path.join(self.complex_graphs_cache, "heterographs.pkl"), 'rb') as f:
-            complex_graphs = pickle.load(f)
+        # KRA Edited: more logic to aid with heterographX.pkl files
+        if os.path.exists(os.path.join(original_model_cache, f"heterographs.pkl")):
+            with open(os.path.join(original_model_cache, "heterographs.pkl"), 'rb') as f:
+                complex_graphs = pickle.load(f)
+        else:
+            complex_names_all = read_strings_from_txt(self.split_path)
+            if self.limit_complexes is not None and self.limit_complexes != 0:
+                complex_names_all = complex_names_all[:self.limit_complexes]
+            complex_graphs_all = []
+            for i in range(len(complex_names_all) // 1000 + 1):
+                with open(os.path.join(original_model_cache, f"heterographs{i}.pkl"), 'rb') as f:
+                    print(i)
+                    l = pickle.load(f)
+                    complex_graphs_all.extend(l)
+            complex_graphs = complex_graphs_all
         self.complex_graph_dict = {d.name: d for d in complex_graphs}
 
         if self.cache_ids_to_combine is None:
@@ -188,7 +248,8 @@ class ConfidenceDataset(Dataset):
                     complex_graph['ligand'].pos = torch.from_numpy(lig_pos)
             complex_graph.y = torch.tensor(label).float()
         else:
-            sample = random.randint(0, self.all_samples_per_complex - 1)
+            # KRA edited: to follow the new logic of keeping high percentage successful samples
+            sample = random.randint(0, len(positions) - 1)
             complex_graph['ligand'].pos = torch.from_numpy(positions[sample])
             complex_graph.y = torch.tensor(rmsds[sample] < self.rmsd_classification_cutoff).float().unsqueeze(0)
             if isinstance(self.rmsd_classification_cutoff, list):
@@ -217,40 +278,80 @@ class ConfidenceDataset(Dataset):
         model.load_state_dict(state_dict, strict=True)
         model = model.to(self.device)
         model.eval()
-
-        tr_schedule = get_t_schedule(inference_steps=self.inference_steps)
+        
+        # KRA - resolved bug: get_t_schedule missing sigma_schedule='expbeta' argument
+        tr_schedule = get_t_schedule(sigma_schedule='expbeta', inference_steps=self.original_model_args.inference_steps,
+                                inf_sched_alpha=1, inf_sched_beta=1)
         rot_schedule = tr_schedule
         tor_schedule = tr_schedule
         print('common t schedule', tr_schedule)
 
+        # KRA - resolved bug: there may be indices on heterographs in ran in parallel during caching; edited version of collect_all_complexes copied over from datasets.pdbbind
         print('HAPPENING | loading cached complexes of the original model to create the confidence dataset RMSDs and predicted positions. Doing that from: ', os.path.join(self.complex_graphs_cache, "heterographs.pkl"))
-        with open(os.path.join(original_model_cache, "heterographs.pkl"), 'rb') as f:
-            complex_graphs = pickle.load(f)
+        # Updated to have similar logic as datasets.pdbbind.py
+        if os.path.exists(os.path.join(original_model_cache, f"heterographs.pkl")):
+            with open(os.path.join(original_model_cache, "heterographs.pkl"), 'rb') as f:
+                complex_graphs = pickle.load(f)
+        else:
+            complex_names_all = read_strings_from_txt(self.split_path)
+            if self.limit_complexes is not None and self.limit_complexes != 0:
+                complex_names_all = complex_names_all[:self.limit_complexes]
+            complex_graphs_all, rdkit_ligands_all = [], []
+            for i in range(len(complex_names_all) // 1000 + 1):
+                with open(os.path.join(original_model_cache, f"heterographs{i}.pkl"), 'rb') as f:
+                    print(i)
+                    l = pickle.load(f)
+                    complex_graphs_all.extend(l)
+                with open(os.path.join(original_model_cache, f"rdkit_ligands{i}.pkl"), 'rb') as f:
+                    rdkit_ligands_all.extend(pickle.load(f))
+            complex_graphs = complex_graphs_all
         dataset = ListDataset(complex_graphs)
         loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False)
-
-        rmsds, full_ligand_positions, names = [], [], []
-        for idx, orig_complex_graph in tqdm(enumerate(loader)):
-            data_list = [copy.deepcopy(orig_complex_graph) for _ in range(self.samples_per_complex)]
-            randomize_position(data_list, self.original_model_args.no_torsion, False, self.original_model_args.tr_sigma_max)
-
+        rmsds, min_rmsds, full_ligand_positions, names = [], [], [], []
+        # KRA Edited: grab ligands as well, aligned with the loader
+        for idx, (orig_complex_graph, rdkit_ligand) in tqdm(enumerate(zip(loader, rdkit_ligands_all))):
+        # MAJOR KRA EDIT:
+        # 1. New approach to sampling: if it fails to get mostly clean samples 10 times, discard the entire complex from dataset
+        # 2. Compute symmetry corrected RMSD if available; the code defaulted to naive approach before
             predictions_list = None
             failed_convergence_counter = 0
             while predictions_list is None:
                 try:
+                    # This computes a new random position each fail--might help some samples find convergence
+                    data_list = [copy.deepcopy(orig_complex_graph) for _ in range(self.samples_per_complex)]
+                    randomize_position(data_list, self.original_model_args.no_torsion, False, self.original_model_args.tr_sigma_max)
                     predictions_list, confidences = sampling(data_list=data_list, model=model, inference_steps=self.inference_steps,
                                                              tr_schedule=tr_schedule, rot_schedule=rot_schedule, tor_schedule=tor_schedule,
                                                              device=self.device, t_to_sigma=t_to_sigma, model_args=self.original_model_args)
+                    # KRA edited: check for bad samples via mask
+                    ligand_pos_check = np.asarray([cg['ligand'].pos.cpu().numpy() for cg in predictions_list])
+                    bad_mask = (
+                        np.isnan(ligand_pos_check).any(axis=(1,2)) |
+                        np.isinf(ligand_pos_check).any(axis=(1,2)) |
+                        (np.abs(ligand_pos_check).max(axis=(1,2)) > 1000)
+                    )
+                    n_bad = bad_mask.sum()
+                    if n_bad == self.samples_per_complex:
+                        raise ValueError(f'{self.samples_per_complex} / {self.samples_per_complex} poses degenerate - retrying with new position')
+                    elif 0 < n_bad and (n_bad / self.samples_per_complex) <= 0.15:
+                        print(f'| WARNING: {n_bad}/{self.samples_per_complex} ({100*n_bad/self.samples_per_complex:.1f}%) poses degenerate - filtering and continuing')
+                        predictions_list = [p for p, good in zip(predictions_list, ~bad_mask) if good]
+                    elif 0 < n_bad:
+                        raise ValueError(f'{n_bad}/{self.samples_per_complex} poses degenerate (>15%) - retrying')
                 except Exception as e:
-                    if 'failed to converge' in str(e):
-                        failed_convergence_counter += 1
-                        if failed_convergence_counter > 5:
-                            print('| WARNING: SVD failed to converge 5 times - skipping the complex')
-                            break
-                        print('| WARNING: SVD failed to converge - trying again with a new sample')
-                    else:
-                        raise e
-            if failed_convergence_counter > 5: predictions_list = data_list
+                    # if 'failed to converge' in str(e):
+                    failed_convergence_counter += 1
+                    predictions_list = None
+                    if failed_convergence_counter > 10:
+                        print('| WARNING: failed on complex 10 times - skipping the complex')
+                        break
+                    print(f'| WARNING: failed on complex - trying again with a new sample, {e}')
+                    # else:
+                    #     raise e
+            # if failed_convergence_counter > 10: predictions_list = data_list
+            if failed_convergence_counter > 10:
+                # rmsds.append([100] * self.samples_per_complex)
+                continue
             if self.original_model_args.no_torsion:
                 orig_complex_graph['ligand'].orig_pos = (orig_complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy())
 
@@ -261,9 +362,25 @@ class ConfidenceDataset(Dataset):
 
             ligand_pos = np.asarray([complex_graph['ligand'].pos.cpu().numpy()[filterHs] for complex_graph in predictions_list])
             orig_ligand_pos = np.expand_dims(orig_complex_graph['ligand'].orig_pos[filterHs] - orig_complex_graph.original_center.cpu().numpy(), axis=0)
-            rmsd = np.sqrt(((ligand_pos - orig_ligand_pos) ** 2).sum(axis=2).mean(axis=1))
 
+            # KRA Edit 2: attempt symmetric rmsd (adapted from utils/training.py)
+            mol = RemoveAllHs(rdkit_ligand)
+            try:
+                rmsd = np.array(get_symmetry_rmsd(mol, orig_ligand_pos[0], [l for l in ligand_pos]))
+            except Exception as e:
+                print(f'| WARNING: symmetry RMSD failed for {orig_complex_graph.name[0]}, using naive: {e}')
+                rmsd = np.sqrt(((ligand_pos - orig_ligand_pos) ** 2).sum(axis=2).mean(axis=1))
+            # rmsd = np.sqrt(((ligand_pos - orig_ligand_pos) ** 2).sum(axis=2).mean(axis=1))
+            # Extra DEBUG:
+            if idx < 50:
+                n_atoms_graph = orig_ligand_pos.shape[1]
+                n_atoms_ligand = RemoveAllHs(rdkit_ligand).GetNumAtoms() if rdkit_ligand is not None else None
+                print(f"[{idx}] name={orig_complex_graph.name[0]}, "
+                    f"graph_atoms={n_atoms_graph}, rdkit_atoms={n_atoms_ligand}, "
+                    f"rmsd_min={rmsd.min():.3f}, rmsd_max={rmsd.max():.3f}")
             rmsds.append(rmsd)
+            min_rmsds.append(rmsd.min())
+            # Needs to get changed
             full_ligand_positions.append(np.asarray([complex_graph['ligand'].pos.cpu().numpy() for complex_graph in predictions_list]))
             names.append(orig_complex_graph.name[0])
             assert(len(orig_complex_graph.name) == 1) # I just put this assert here because of the above line where I assumed that the list is always only lenght 1. Just in case it isn't maybe check what the names in there are.
@@ -271,6 +388,16 @@ class ConfidenceDataset(Dataset):
             pickle.dump((full_ligand_positions, rmsds), f)
         with open(os.path.join(self.full_cache_path, f"complex_names_in_same_order{'' if self.cache_creation_id is None else '_id' + str(self.cache_creation_id)}.pkl"), 'wb') as f:
             pickle.dump((names), f)
+        
+        # KRA Edited: final metrics
+        rmsds_flat = np.concatenate(rmsds)
+        min_rmsds = np.array(min_rmsds)
+        original_set_length = len(read_strings_from_txt(self.split_path))
+        print(f'complexes kept:  {len(names)} / {original_set_length}')
+        print(f'rmsds_lt2:       {100 * (rmsds_flat < 2).mean():.2f}%')
+        print(f'rmsds_lt5:       {100 * (rmsds_flat < 5).mean():.2f}%')
+        print(f'min_rmsds_lt2:   {100 * (min_rmsds < 2).mean():.2f}%')
+        print(f'min_rmsds_lt5:   {100 * (min_rmsds < 5).mean():.2f}%')
 
 
 
