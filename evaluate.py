@@ -19,6 +19,10 @@ import numpy as np
 # import wandb
 from rdkit import RDLogger
 from torch_geometric.loader import DataLoader
+# KRA Edited: files to assist with new data loading logic
+from datasets.test_loader import construct_test_loader
+
+from confidence.dataset import ListDataset
 from rdkit.Chem import RemoveAllHs
 
 from datasets.pdbbind import PDBBind
@@ -32,6 +36,9 @@ RDLogger.DisableLog('rdApp.*')
 import yaml
 import pickle
 
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+import csv
 
 def get_dataset(args, model_args, confidence=False):
     if args.dataset != 'moad':
@@ -55,7 +62,8 @@ def get_dataset(args, model_args, confidence=False):
                         knn_only_graph=True if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
                         include_miscellaneous_atoms=False if not hasattr(args,
                                                                          'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
-                        num_conformers=args.samples_per_complex if args.resample_rdkit and not confidence else 1)
+                        num_conformers=args.samples_per_complex if args.resample_rdkit and not confidence else 1,
+                        vdw_base = model_args.vdw_base, vdw_curv = model_args.vdw_curv, vdw_vol = model_args.vdw_vol)
 
     else:
         dataset = MOAD(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes,
@@ -83,13 +91,14 @@ def get_dataset(args, model_args, confidence=False):
                        max_receptor_size=args.max_receptor_size,
                        remove_promiscuous_targets=args.remove_promiscuous_targets,
                        no_randomness=True,
-                       skip_matching=args.skip_matching)
+                       skip_matching=args.skip_matching,
+                       vdw_base = model_args.vdw_base, vdw_curv = model_args.vdw_curv, vdw_vol = model_args.vdw_vol)
     return dataset
 
 
 
 if __name__ == '__main__':
-    cache_name = datetime.now().strftime('date%d-%m_time%H-%M-%S.%f')
+    # cache_name = datetime.now().strftime('date%d-%m_time%H-%M-%S.%f')
     parser = ArgumentParser()
     parser.add_argument('--config', type=FileType(mode='r'), default=None)
     parser.add_argument('--model_dir', type=str, default='workdir/test_score', help='Path to folder with trained score model and hyperparameters')
@@ -103,7 +112,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=40, help='Number of poses to sample in parallel')
 
     parser.add_argument('--old_score_model', action='store_true', default=False, help='')
-    parser.add_argument('--old_confidence_model', action='store_true', default=True, help='')
+    parser.add_argument('--old_confidence_model', action='store_true', default=False, help='')
     parser.add_argument('--matching_popsize', type=int, default=40, help='Differential evolution popsize parameter in matching')
     parser.add_argument('--matching_maxiter', type=int, default=40, help='Differential evolution maxiter parameter in matching')
 
@@ -127,7 +136,7 @@ if __name__ == '__main__':
     parser.add_argument('--limit_complexes', type=int, default=0, help='Limit to the number of complexes')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for dataset creation')
     parser.add_argument('--tqdm', action='store_true', default=False, help='Whether to show progress bar')
-    parser.add_argument('--save_visualisation', action='store_true', default=True, help='Whether to save visualizations')
+    parser.add_argument('--save_visualisation', action='store_true', default=False, help='Whether to save visualizations')
     parser.add_argument('--samples_per_complex', type=int, default=4, help='Number of poses to sample for each complex')
     parser.add_argument('--resample_rdkit', action='store_true', default=False, help='')
     parser.add_argument('--skip_matching', action='store_true', default=False, help='')
@@ -194,7 +203,7 @@ if __name__ == '__main__':
 
         torch.set_num_threads(threads)
 
-    if args.out_dir is None: args.out_dir = f'inference_out_dir_not_specified/{args.run_name}'
+    args.out_dir = f'inference_out_dir_not_specified/{args.run_name}' if args.out_dir is None else f'{args.out_dir}/{args.run_name}'
     os.makedirs(args.out_dir, exist_ok=True)
     with open(f'{args.model_dir}/model_parameters.yml') as f:
         score_model_args = Namespace(**yaml.full_load(f))
@@ -235,8 +244,14 @@ if __name__ == '__main__':
     if args.num_cpu is not None:
         torch.set_num_threads(args.num_cpu)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    test_dataset = get_dataset(args, score_model_args)
-    test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
+    # KRA Edited- I imagine this next part was deprecated after the DiffDock-L release
+    # -- Logic changed to match train.py
+    # test_dataset = get_dataset(args, score_model_args)
+    # test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
+    t_to_sigma = partial(t_to_sigma_compl, args=score_model_args)
+    pre_test_loader = construct_test_loader(score_model_args, t_to_sigma, device, test_split_path = args.split_path,
+                                                limit_complexes = args.limit_complexes)
+
     if args.confidence_model_dir is not None:
         if not (confidence_args.use_original_model_cache or confidence_args.transfer_weights):
             # if the confidence model uses the same type of data as the original model then we do not need this dataset and can just use the complexes
@@ -244,22 +259,22 @@ if __name__ == '__main__':
             confidence_test_dataset = get_dataset(args, confidence_args, confidence=True)
             confidence_complex_dict = {d.name: d for d in confidence_test_dataset}
 
-    t_to_sigma = partial(t_to_sigma_compl, args=score_model_args)
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
-        if args.ckpt == 'last_model.pt':
-            model_state_dict = state_dict['model']
-            ema_weights_state = state_dict['ema_weights']
-            model.load_state_dict(model_state_dict, strict=True)
-            ema_weights = ExponentialMovingAverage(model.parameters(), decay=score_model_args.ema_rate)
-            ema_weights.load_state_dict(ema_weights_state, device=device)
-            ema_weights.copy_to(model.parameters())
+        # KRA edited: make this more general because I started saving the optimizers
+        if isinstance(state_dict, dict) and 'model' in state_dict:
+            model.load_state_dict(state_dict['model'], strict=True)
+            if 'ema_weights' in state_dict and 'ema' not in args.ckpt:
+                ema_weights = ExponentialMovingAverage(model.parameters(), decay=score_model_args.ema_rate)
+                ema_weights.load_state_dict(state_dict['ema_weights'], device=device)
+                ema_weights.copy_to(model.parameters())
         else:
             model.load_state_dict(state_dict, strict=True)
-            model = model.to(device)
-            model.eval()
+
+        model = model.to(device)
+        model.eval()
         if args.confidence_model_dir is not None:
             if confidence_args.transfer_weights:
                 with open(f'{confidence_args.original_model_dir}/model_parameters.yml') as f:
@@ -320,13 +335,12 @@ if __name__ == '__main__':
     else:
         t_max = 1
 
-    tr_schedule = get_t_schedule(sigma_schedule=args.sigma_schedule, inference_steps=args.inference_steps,
+    # KRA Edited - make it the same as training.py
+    t_schedule = get_t_schedule(sigma_schedule=args.sigma_schedule, inference_steps=args.inference_steps,
                                  inf_sched_alpha=args.inf_sched_alpha, inf_sched_beta=args.inf_sched_beta,
                                  t_max=t_max)
-    t_schedule = None
-    rot_schedule = tr_schedule
-    tor_schedule = tr_schedule
-    print('common t schedule', tr_schedule)
+    tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
+    # print('common t schedule', tr_schedule)
 
     rmsds_list, obrmsds, centroid_distances_list, failures, skipped, min_cross_distances_list, base_min_cross_distances_list, confidences_list, names_list = [], [], [], 0, 0, [], [], [], []
     run_times, min_self_distances_list, without_rec_overlap_list = [], [], []
@@ -335,7 +349,7 @@ if __name__ == '__main__':
     #names_no_rec_overlap = read_strings_from_txt(f'data/splits/timesplit_test_no_rec_overlap')
     #names_no_rec_overlap = np.load("data/BindingMOAD_2020_processed/test_names_bootstrapping.npy")
     names_no_rec_overlap = []
-    print('Size of test dataset: ', len(test_dataset))
+    # print('Size of test dataset: ', len(test_dataset))
 
     if args.save_complexes:
         sampled_complexes = {}
@@ -344,6 +358,11 @@ if __name__ == '__main__':
         # key is complex_name, value is the gnina metrics for all samples
         gnina_metrics = {}
 
+    # KRA Edited:
+    # - logic similar to train.py and training.py to aid with DataListLoader change
+    test_dataset = [pre_test_loader.dataset[i] for i in range(len(pre_test_loader.dataset))]
+    test_dataset_list = ListDataset(test_dataset)
+    test_loader = DataLoader(dataset=test_dataset_list, batch_size=1, shuffle=False)
     for idx, orig_complex_graph in tqdm(enumerate(test_loader)):
         torch.cuda.empty_cache()
 
@@ -542,6 +561,7 @@ if __name__ == '__main__':
 
     if args.save_complexes:
         print("Saving complexes.")
+        os.makedirs(args.complexes_save_path, exist_ok=True)
         if args.complexes_save_path is not None:
             with open(os.path.join(args.complexes_save_path, "ligands.pkl"), 'wb') as f:
                 pickle.dump(sampled_complexes, f)
@@ -760,6 +780,17 @@ if __name__ == '__main__':
 
     for k in performance_metrics:
         print(k, performance_metrics[k])
+
+    # KRA edited: Output csv for performance metrics
+    csv_path = f'{args.out_dir}/{args.run_name}_performance_metrics.csv'
+
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=['metric', 'value'])
+        writer.writeheader()
+        for metric, value in performance_metrics.items():
+            writer.writerow({'metric': metric, 'value': value})
+
+    print(f"Performance metrics saved to {csv_path}")
 
     if args.wandb:
         wandb.log(performance_metrics)
