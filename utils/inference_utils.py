@@ -118,7 +118,8 @@ def generate_ESM_structure(model, filename, sequence):
 class InferenceDataset(Dataset):
     def __init__(self, out_dir, complex_names, protein_files, ligand_descriptions, protein_sequences, lm_embeddings,
                  receptor_radius=30, c_alpha_max_neighbors=None, precomputed_lm_embeddings=None,
-                 remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None, knn_only_graph=False):
+                 remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None, knn_only_graph=False,
+                 vdw_base=False, vdw_curv=False, vdw_vol=False):
 
         super(InferenceDataset, self).__init__()
         self.receptor_radius = receptor_radius
@@ -132,6 +133,9 @@ class InferenceDataset(Dataset):
         self.protein_files = protein_files
         self.ligand_descriptions = ligand_descriptions
         self.protein_sequences = protein_sequences
+        self.vdw_base = vdw_base
+        self.vdw_curv = vdw_curv
+        self.vdw_vol = vdw_vol
 
         # generate LM embeddings
         if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
@@ -212,8 +216,10 @@ class InferenceDataset(Dataset):
 
         try:
             # parse the receptor from the pdb file
+            # KRA Edited: has to include the vdw flags
             get_lig_graph_with_matching(mol, complex_graph, popsize=None, maxiter=None, matching=False, keep_original=False,
-                                        num_conformers=1, remove_hs=self.remove_hs)
+                                        num_conformers=1, remove_hs=self.remove_hs,
+                                        vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
             moad_extract_receptor_structure(
                 path=os.path.join(protein_file),
@@ -224,7 +230,8 @@ class InferenceDataset(Dataset):
                 knn_only_graph=self.knn_only_graph,
                 all_atoms=self.all_atoms,
                 atom_cutoff=self.atom_radius,
-                atom_max_neighbors=self.atom_max_neighbors)
+                atom_max_neighbors=self.atom_max_neighbors,
+                vdw_base=self.vdw_base, vdw_curv=self.vdw_curv, vdw_vol=self.vdw_vol)
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')
@@ -243,4 +250,18 @@ class InferenceDataset(Dataset):
         complex_graph.original_center = protein_center
         complex_graph.mol = mol
         complex_graph['success'] = True
+
+        # KRA Edited:
+        # complex_t placeholders - gets set to their actual values later in set_time under sampling
+        complex_graph['ligand'].node_t = {'tr': 0 * torch.ones(complex_graph['ligand'].num_nodes),
+                                          'rot': 0 * torch.ones(complex_graph['ligand'].num_nodes),
+                                          'tor': 0 * torch.ones(complex_graph['ligand'].num_nodes)}
+        complex_graph['receptor'].node_t = {'tr': 0 * torch.ones(complex_graph['receptor'].num_nodes),
+                                            'rot': 0 * torch.ones(complex_graph['receptor'].num_nodes),
+                                            'tor': 0 * torch.ones(complex_graph['receptor'].num_nodes)}
+        if self.all_atoms:
+            complex_graph['atom'].node_t = {'tr': 0 * torch.ones(complex_graph['atom'].num_nodes),
+                                            'rot': 0 * torch.ones(complex_graph['atom'].num_nodes),
+                                            'tor': 0 * torch.ones(complex_graph['atom'].num_nodes)}
+        complex_graph.complex_t = {'tr': 0 * torch.ones(1), 'rot': 0 * torch.ones(1), 'tor': 0 * torch.ones(1)}
         return complex_graph
