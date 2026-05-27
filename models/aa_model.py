@@ -94,7 +94,7 @@ class AAModel(torch.nn.Module):
             self.lm = lm
         
 
-        # KRA Edited NOT YET IMPLEMENTEd
+        # KRA Edited - number of scalar features
         vdw_count = sum([vdw_base, vdw_curv, vdw_vol])
 
         current_lig_dims = (lig_feature_dims[0], vdw_count)
