@@ -87,7 +87,57 @@ rec_residue_feature_dims = (list(map(len, [
 ])), 0)
 
 
-def lig_atom_featurizer(mol):
+
+
+#### KRA EDITED: This is based on Tsai et. al J Mol Bio 290:253 (1999) accessed from ChimeraX VDW Radii page
+# This function refines certain atoms (C, N, O, S) to their united-atom radii counterparts while also
+# including a failsafe value in case GetRvdw returns a null value. This is only used for ligands
+# as the protein structures DiffDock trained on were purged of their hydrogens.
+def get_ligand_refined_vdw(atom):
+    # print("START OF LIGAND ATOM FEATURIZER") ##KRA
+    try:
+        num = atom.GetAtomicNum()
+    except:
+        print("Ligand Atom failed to return valid atomic number/VDW radius. Using default radius of 1.60")
+        return 1.60 #default
+    if num == 6:  # Carbon
+        if str(atom.GetHybridization()) == 'SP2':
+            num_h = atom.GetTotalNumHs()
+            # print("INSIDE CARBON HYBRIDIZATION NOW") ##KRA
+            return 1.61 if num_h == 0 else 1.76
+        return 1.88
+    
+    if num == 7:  # Nitrogen
+        return 1.64 
+    
+    if num == 8:  # Oxygen
+        return 1.42 if str(atom.GetHybridization()) == 'SP2' else 1.46
+    
+    if num == 16: # Sulfur
+        return 1.77
+
+    try:
+        num = atom.GetAtomicNum()
+        vdwr = periodic_table.GetRvdw(num)
+    except:
+        print("Ligand Atom failed to return valid atomic number/VDW radius. Using default radius of 1.60")
+        return 1.60
+    return vdwr if vdwr > 0 else 1.60
+
+### KRA Edited: Same as above but simpler since receptor atoms had their hydrogens removed. KEY: Atomic numbers passed in here instead of atoms like above
+def get_safe_residue_vdw(atomic_num):
+    # print("INSIDE RESIDUE ATOM NOW")
+    try:
+        # num = atom.GetAtomicNum()
+        vdwr = periodic_table.GetRvdw(atomic_num)
+    except:
+        print("Residue Atom failed to return valid atomic number/VDW radius. Using default radius of 1.60")
+        return 1.60
+    return vdwr if vdwr > 0 else 1.60
+    
+
+# KRA Edited: Includes new features and flags
+def lig_atom_featurizer(mol, vdw_base=False, vdw_curv=False, vdw_vol=False):
     ringinfo = mol.GetRingInfo()
     atom_features_list = []
     for idx, atom in enumerate(mol.GetAtoms()):
@@ -95,7 +145,7 @@ def lig_atom_featurizer(mol):
         if chiral_tag  in ['CHI_SQUAREPLANAR', 'CHI_TRIGONALBIPYRAMIDAL', 'CHI_OCTAHEDRAL']:
             chiral_tag = 'CHI_OTHER'
 
-        atom_features_list.append([
+        atom_features = [
             safe_index(allowable_features['possible_atomic_num_list'], atom.GetAtomicNum()),
             allowable_features['possible_chirality_list'].index(str(chiral_tag)),
             safe_index(allowable_features['possible_degree_list'], atom.GetTotalDegree()),
@@ -113,8 +163,24 @@ def lig_atom_featurizer(mol):
             allowable_features['possible_is_in_ring7_list'].index(ringinfo.IsAtomInRingOfSize(idx, 7)),
             allowable_features['possible_is_in_ring8_list'].index(ringinfo.IsAtomInRingOfSize(idx, 8)),
             #g_charge if not np.isnan(g_charge) and not np.isinf(g_charge) else 0.
-        ])
-    return torch.tensor(atom_features_list)
+        ]
+
+        #### KRA EDITED: get centered van der waals features based on flags
+        if  vdw_base or vdw_curv or vdw_vol:
+            vdw_r = get_ligand_refined_vdw(atom)
+            if vdw_base:
+                vdw_base_feat = vdw_r - 1.60
+                atom_features.append(vdw_base_feat)
+            if vdw_curv:
+                vdw_curv_feat = (1/vdw_r) - (1/1.60)
+                atom_features.append(vdw_curv_feat)
+            if vdw_vol:
+                vdw_vol_feat = (4/3)*(vdw_r**3) - (4/3)*(1.60**3)
+                atom_features.append(vdw_vol_feat)
+        
+        atom_features_list.append(atom_features)
+    
+    return torch.tensor(atom_features_list, dtype = torch.float32)
 
 
 def safe_index(l, e):
@@ -125,14 +191,16 @@ def safe_index(l, e):
         return len(l) - 1
 
 
+# KRA Edited: Includes new features and flags
 def moad_extract_receptor_structure(path, complex_graph, neighbor_cutoff=20, max_neighbors=None, sequences_to_embeddings=None,
-                                    knn_only_graph=False, lm_embeddings=None, all_atoms=False, atom_cutoff=None, atom_max_neighbors=None):
+                                    knn_only_graph=False, lm_embeddings=None, all_atoms=False, atom_cutoff=None, atom_max_neighbors=None,
+                                    vdw_base=False, vdw_curv=False, vdw_vol=False):
     # load the entire pdb file
     pdb = pr.parsePDB(path)
     seq = pdb.ca.getSequence()
     coords = get_coords(pdb)
     one_hot = get_onehot_sequence(seq)
-
+    # print("NOW EXTRACTING THE RECEPTOR STRUCTURE")
     chain_ids = np.zeros(len(one_hot))
     res_chain_ids = pdb.ca.getChids()
     res_seg_ids = pdb.ca.getSegnames()
@@ -152,18 +220,21 @@ def moad_extract_receptor_structure(path, complex_graph, neighbor_cutoff=20, max
 
     complex_graph['receptor'].sequence = sequences
     complex_graph['receptor'].chain_ids = torch.from_numpy(np.asarray(chain_ids)).long()
-
+    
     new_extract_receptor_structure(seq, coords, complex_graph, neighbor_cutoff=neighbor_cutoff, max_neighbors=max_neighbors,
                                    lm_embeddings=lm_embeddings, knn_only_graph=knn_only_graph, all_atoms=all_atoms,
-                                   atom_cutoff=atom_cutoff, atom_max_neighbors=atom_max_neighbors)
+                                   atom_cutoff=atom_cutoff, atom_max_neighbors=atom_max_neighbors,
+                                   vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
 
+# KRA Edited: Includes new features and flags
 def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cutoff=20, max_neighbors=None, lm_embeddings=None,
-                                   knn_only_graph=False, all_atoms=False, atom_cutoff=None, atom_max_neighbors=None):
+                                   knn_only_graph=False, all_atoms=False, atom_cutoff=None, atom_max_neighbors=None,
+                                   vdw_base=False, vdw_curv=False, vdw_vol=False):
     chi_angles, one_hot = get_chi_angles(all_coords, seq, return_onehot=True)
     n_rel_pos, c_rel_pos = all_coords[:, 0, :] - all_coords[:, 1, :], all_coords[:, 2, :] - all_coords[:, 1, :]
     side_chain_vecs = torch.from_numpy(np.concatenate([chi_angles / 360, n_rel_pos, c_rel_pos], axis=1))
-
+    # print("NOW IN NEW_EXTRACT_RECEPTOR_STRUCTURE; printing ALL ATOMS FLAG:", all_atoms)
     # Build the k-NN graph
     coords = torch.tensor(all_coords[:, 1, :], dtype=torch.float)
     if len(coords) > 3000:
@@ -201,6 +272,7 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
     complex_graph['receptor'].side_chain_vecs = side_chain_vecs.float()
     complex_graph['receptor', 'rec_contact', 'receptor'].edge_index = edge_index
     if all_atoms:
+        # print("ALL ATOMS I.E. WHERE WE LOAD THE FEATURES WE CARE ABOUT")
         atom_coords = all_coords.reshape(-1, 3)
         atom_coords = torch.from_numpy(atom_coords[~np.any(np.isnan(atom_coords), axis=1)]).float()
 
@@ -227,7 +299,7 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
                 atom_dst_list.extend(dst)
             atoms_edge_index = torch.from_numpy(np.asarray([atom_dst_list, atom_src_list]))
         
-        feats = [get_moad_atom_feats(res, all_coords[i]) for i, res in enumerate(seq)]
+        feats = [get_moad_atom_feats(res, all_coords[i], vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol) for i, res in enumerate(seq)]
         atom_feat = torch.from_numpy(np.concatenate(feats, axis=0)).float()
         c_alpha_idx = np.concatenate([np.zeros(len(f)) + i for i, f in enumerate(feats)])
         np_array = np.stack([np.arange(len(atom_feat)), c_alpha_idx])
@@ -241,10 +313,13 @@ def new_extract_receptor_structure(seq, all_coords, complex_graph, neighbor_cuto
     return
 
 
-def get_moad_atom_feats(res, coords):
+# KRA Edited: Includes new features and flags
+def get_moad_atom_feats(res, coords, vdw_base=False, vdw_curv=False, vdw_vol=False):
     feats = []
     res_long = aa_short2long[res]
     res_order = atom_order[res]
+    # KRA edited: number of scalar features
+    vdw_count = sum([vdw_base, vdw_curv, vdw_vol])
     for i, c in enumerate(coords):
         if np.any(np.isnan(c)):
             continue
@@ -253,31 +328,49 @@ def get_moad_atom_feats(res, coords):
             atom_feats = [safe_index(allowable_features['possible_amino_acids'], 'misc'),
                      safe_index(allowable_features['possible_atomic_num_list'], 'misc'),
                      safe_index(allowable_features['possible_atom_type_2'], 'misc'),
-                     safe_index(allowable_features['possible_atom_type_3'], 'misc')]
+                     safe_index(allowable_features['possible_atom_type_3'], 'misc')] 
+            ##KRA edited - needs a default for the tensor logic to work
+            # up to the number of included scalar feaetures
+            atom_feats.extend([0.0] * vdw_count)
         else:
             atom_feats.append(safe_index(allowable_features['possible_amino_acids'], res_long))
             if i >= len(res_order):
                 atom_feats.extend([safe_index(allowable_features['possible_atomic_num_list'], 'misc'),
                                    safe_index(allowable_features['possible_atom_type_2'], 'misc'),
                                    safe_index(allowable_features['possible_atom_type_3'], 'misc')])
+                ##KRA edited - needs a default for the tensor logic to work
+                # up to the number of included scalar feaetures
+                atom_feats.extend([0.0] * vdw_count)                   
             else:
                 atom_name = res_order[i]
                 try:
                     atomic_num = periodic_table.GetAtomicNumber(atom_name[:1])
+
                 except:
                     print("element", res_order[i][:1], 'not found')
                     atomic_num = -1
-
                 atom_feats.extend([safe_index(allowable_features['possible_atomic_num_list'], atomic_num),
                                    safe_index(allowable_features['possible_atom_type_2'], (atom_name + '*')[:2]),
                                    safe_index(allowable_features['possible_atom_type_3'], atom_name)])
+                #### KRA EDITED: get centered van der waals features based on flags
+                if  vdw_base or vdw_curv or vdw_vol:
+                    vdw_r = get_safe_residue_vdw(atomic_num)
+                    if vdw_base:
+                        vdw_base_feat = vdw_r - 1.60
+                        atom_feats.append(vdw_base_feat)
+                    if vdw_curv:
+                        vdw_curv_feat = (1/vdw_r) - (1/1.60)
+                        atom_feats.append(vdw_curv_feat)
+                    if vdw_vol:
+                        vdw_vol_feat = (4/3)*(vdw_r**3) - (4/3)*(1.60**3)
+                        atom_feats.append(vdw_vol_feat)
         feats.append(atom_feats)
     feats = np.asarray(feats)
     return feats
 
-
-def get_lig_graph(mol, complex_graph):
-    atom_feats = lig_atom_featurizer(mol)
+# KRA Edited: Includes new features and flags
+def get_lig_graph(mol, complex_graph, vdw_base=False, vdw_curv=False, vdw_vol=False):
+    atom_feats = lig_atom_featurizer(mol, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
     row, col, edge_type = [], [], []
     for bond in mol.GetBonds():
@@ -319,8 +412,9 @@ def generate_conformer(mol):
     #    AllChem.MMFFOptimizeMolecule(mol, confId=0)
     return False
 
-
-def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, remove_hs, tries=10, skip_matching=False):
+# KRA Edited: Includes new features and flags
+def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, 
+                                remove_hs, tries=10, skip_matching=False, vdw_base=False, vdw_curv=False, vdw_vol=False):
     if matching:
         mol_maybe_noh = copy.deepcopy(mol_)
         if remove_hs:
@@ -366,7 +460,7 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
             mol_rdkit = mols[np.argmin(rmsds)]
             if i == 0:
                 complex_graph.rmsd_matching = min(rmsds)
-                get_lig_graph(mol_rdkit, complex_graph)
+                get_lig_graph(mol_rdkit, complex_graph, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
             else:
                 if torch.is_tensor(complex_graph['ligand'].pos):
                     complex_graph['ligand'].pos = [complex_graph['ligand'].pos]
@@ -375,7 +469,7 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
     else:  # no matching
         complex_graph.rmsd_matching = 0
         if remove_hs: mol_ = RemoveHs(mol_)
-        get_lig_graph(mol_, complex_graph)
+        get_lig_graph(mol_, complex_graph, vdw_base=vdw_base, vdw_curv=vdw_curv, vdw_vol=vdw_vol)
 
     edge_mask, mask_rotate = get_transformation_mask(complex_graph)
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)
@@ -383,13 +477,20 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
 
     return
 
+# KRA Edited: Includes new features and flags
+def get_rec_misc_atom_feat(bio_atom=None, atom_name=None, element=None, get_misc_features=False,
+                            vdw_base=False, vdw_curv=False, vdw_vol=False):
 
-def get_rec_misc_atom_feat(bio_atom=None, atom_name=None, element=None, get_misc_features=False):
+    # KRA edited: number of scalar features
+    vdw_count = sum([vdw_base, vdw_curv, vdw_vol])
     if get_misc_features:
-        return [safe_index(allowable_features['possible_amino_acids'], 'misc'),
+        atom_feat = [safe_index(allowable_features['possible_amino_acids'], 'misc'),
                  safe_index(allowable_features['possible_atomic_num_list'], 'misc'),
                  safe_index(allowable_features['possible_atom_type_2'], 'misc'),
                  safe_index(allowable_features['possible_atom_type_3'], 'misc')]
+        ## KRA edited - adds default zeroes per number of vdw flags
+        atom_feat.extend([0.0] * vdw_count)
+        return atom_feat
     if atom_name is not None:
         atom_name = atom_name
     else:
@@ -405,11 +506,22 @@ def get_rec_misc_atom_feat(bio_atom=None, atom_name=None, element=None, get_misc
         atomic_num = periodic_table.GetAtomicNumber(element.lower().capitalize())
     except:
         atomic_num = -1
-
     atom_feat = [safe_index(allowable_features['possible_amino_acids'], bio_atom.get_parent().get_resname()),
                  safe_index(allowable_features['possible_atomic_num_list'], atomic_num),
                  safe_index(allowable_features['possible_atom_type_2'], (atom_name + '*')[:2]),
-                 safe_index(allowable_features['possible_atom_type_3'], atom_name)]
+                 safe_index(allowable_features['possible_atom_type_3'], atom_name)] 
+    #### KRA EDITED: get centered van der waals features based on flags
+    if  vdw_base or vdw_curv or vdw_vol:
+        vdw_r = get_safe_residue_vdw(atomic_num)
+        if vdw_base:
+            vdw_base_feat = vdw_r - 1.60
+            atom_feat.append(vdw_base_feat)
+        if vdw_curv:
+            vdw_curv_feat = (1/vdw_r) - (1/1.60)
+            atom_feat.append(vdw_curv_feat)
+        if vdw_vol:
+            vdw_vol_feat = (4/3)*(vdw_r**3) - (4/3)*(1.60**3)
+            atom_feat.append(vdw_vol_feat)
     return atom_feat
 
 
