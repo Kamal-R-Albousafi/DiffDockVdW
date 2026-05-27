@@ -23,6 +23,10 @@ def parse_train_args():
     parser.add_argument('--test_sigma_intervals', action='store_true', default=False, help='Whether to log loss per noise interval')
     parser.add_argument('--val_inference_freq', type=int, default=5, help='Frequency of epochs for which to run expensive inference on val data')
     parser.add_argument('--save_model_freq', type=int, default=None, help='Frequency of how many epochs before saving the checkpoint')
+    # KRA Edited: added argument that allows users to specify if they would like to save the optimizer state to allow for restart
+    # at any previously saved model checkpoint that was output to log_dir
+    # CAUTION: this may be harsh on disk-space, hence the default=False. Use responsibly.
+    parser.add_argument('--save_optim', action='store_true', default=False, help='Whether to save the optimizer state when saving checkpoints')
     parser.add_argument('--inference_samples', type=int, default=1, help='')
     parser.add_argument('--train_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on train data')
     parser.add_argument('--inference_steps', type=int, default=20, help='Number of denoising steps for inference on val')
