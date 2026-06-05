@@ -1,27 +1,32 @@
-# DiffDockHPC
-DiffDockHPC is a fork of [DiffDock](https://github.com/gcorso/DiffDock), which adds support to run DiffDock on HPC systems using Singularity and Slurm.  
-DiffDockHPC has been developed to be part of a consensus docking protocol: [ESSENCE-Dock](https://pubs.acs.org/doi/abs/10.1021/acs.jcim.3c01982).  
-For more details about DiffDock itself, we refer to the [DiffDock Github](https://github.com/gcorso/DiffDock) and the [Paper on arXiv](https://arxiv.org/abs/2210.01776).
-DiffDockHPC current version matches to DiffDock v1.1 ([DiffDock-L](https://arxiv.org/abs/2402.18396)).  
-**Note:** If you update from DiffDockHPC v1.0, it is highly recommended to perform a clean install.  
+# DiffDock-VdW
+DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessing algorithm to include VdW features at the atom-node level. We provide the code and some examples of how to make use of DiffDockHPC to leverage High Performance Computing clusters and slurm. Furthermore, DiffDock-VdW is a fork of [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) which provides users HPC DiffDock functionality through Singularity and Slurm. Further, DiffDockHPC is itself a fork of [DiffDock](https://github.com/gcorso/DiffDock).
 
-DiffDockHPC is also available for the original DiffDock v1.0 implementation. This version was used in the original [ESSENCE-Dock](https://pubs.acs.org/doi/abs/10.1021/acs.jcim.3c01982) paper.
-In case you want to work with DiffDockHPC using the DiffDock 1.0 implementation, you can clone the project, and use `git checkout DiffDockHPCv1.0`.
+## The Organization of the Information Below
+1. Requirements
+2. Running DiffDock-VdW using our VdW models
+3. Reproducing our procedure (Data preprocessing with HiQBind -> Model Training -> Model Validation)
+4. Examples of srun commands (inference and train/evaluation)
 
-### Requirements:
+## Requirements
+### Software Requirements:
 * Singularity 
 * Slurm (There is a --no_slurm mode, but using Slurm is highly recommended)
 
+### Hardware Requirements
+* **Inference:** Run-time execution is lightweight and compatible with standard modern GPUs.
+* **Training Replication:** Reproducing the full ablation study requires a minimum of **80GB VRAM** (e.g., NVIDIA A100 80GB).
+
+## Running our DiffDock-VdW models
 ### Installation instructions:
 1. Clone the repository and navigate to it
     ```
-    git clone https://github.com/Jnelen/DiffDockHPC
+    git clone https://github.com/Kamal-R-Albousafi/DiffDockVdW
     ```
    ```
-   cd DiffDockHPC
+   cd DiffDockVdW
    ```
    
-2. Run a test example to automatically download the Singularity image (~3 GB) and to generate the necessary cache look-up tables for SO(2) and SO(3) distributions. (This only needs to happen once and usually takes around 15 minutes).  
+2. **Install the Singularity image**. There are multiple methods of doing this. From [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC): Run a test example to automatically download the Singularity image (~3 GB) and to generate the necessary cache look-up tables for SO(2) and SO(3) distributions. (This only needs to happen once and usually takes around 15 minutes).  
    The `--no_slurm` flag is optional here, but makes it easier to track the progress.   
    ```
    python inferenceVS.py -p data/1a0q/1a0q_protein_processed.pdb -l data/1a0q/ -out TEST -j 1 --no_slurm
@@ -30,15 +35,26 @@ In case you want to work with DiffDockHPC using the DiffDock 1.0 implementation,
    ```
    python inferenceVS.py -p data/1a0q/1a0q_protein_processed.pdb -l data/1a0q/ -out TEST -j 1 -gpu --no_slurm
    ```  
-You can also download the Singularity image manually:
+[DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) additionally provides a method to manually download the Singularity image:
    ```
    wget --no-check-certificate -r "https://drive.usercontent.google.com/download?id=1TsbuhNWA74AHfIbKV5uh2lmEnD99VlCD&confirm=t" -O singularity/DiffDockHPC.sif
    ```
    
-   alternatively, you can build the singularity image yourself using:
+   Likewise, you can build the singularity image yourself using:
    ```
    singularity build singularity/DiffDockHPC.sif singularity/DiffDockHPC.def
    ```
+
+   Optionally, if you intend on running many jobs in quick succession (i.e. debugging or preliminary jobs), you can sandbox the singularity image (There are examples of jobs with using both the sif and the sandbox in the examples section below) :
+   ```
+   singularity build --sandbox singularity/DiffDockHPC DiffDockHPC.sif
+   ```
+
+3. Note: When training the models, you must bind the batchnorm fix from the mye3nn folder to the singularity image. The srun examples below demonstrate this fix in greater detail.
+
+4. Download and unzip our models 
+
+
 ### Options
 
 The main file to use is `inferenceVS.py`. It has the following options/flags:  
