@@ -50,10 +50,19 @@ DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessin
    singularity build --sandbox singularity/DiffDockHPC DiffDockHPC.sif
    ```
 
-3. Note: When training the models, you must bind the batchnorm fix from the mye3nn folder to the singularity image. The srun examples below demonstrate this fix in greater detail.
+3. Note: When training the models (or running inference without inferenceVS), you must bind the batchnorm fix from the mye3nn folder to the singularity image. The srun examples below demonstrate this fix in greater detail.
 
-4. Download and unzip our models 
+4. Download and unzip our model weights: [Download weights](https://github.com/Kamal-R-Albousafi/DiffDockVdW/releases/download/v1.1.3/diffdockvdw_models.tar.gz)
 
+   You can also download them using wget to place them directly onto your compute cluster:
+   ```
+   wget https://github.com/Kamal-R-Albousafi/DiffDockVdW/releases/download/v1.1.3/diffdockvdw_models.tar.gz
+   ```
+5. You are now ready to run inference. Placing the confidence_model and score_model folders into your DiffDockVdW directory will allow inference to be run with the following command:
+
+```
+
+```
 
 ### Options
 
