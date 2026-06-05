@@ -10,7 +10,7 @@ DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessin
 ## Requirements
 ### Software Requirements:
 * Singularity 
-* Slurm (There is a --no_slurm mode, but using Slurm is highly recommended)
+* Slurm* (Though not required, our examples will make use of it)
 
 ### Hardware Requirements
 * **Inference:** Run-time execution is lightweight and compatible with standard modern GPUs.
