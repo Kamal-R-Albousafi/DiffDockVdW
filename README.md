@@ -60,7 +60,7 @@ DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessin
    ```
    wget https://github.com/Kamal-R-Albousafi/DiffDockVdW/releases/download/v1.1.3/diffdockvdw_models.tar.gz
    ```
-5. You are now ready to run inference. Placing the confidence_model and score_model folders into your DiffDockVdW directory will allow inference to be run with the following command (within a sbatch file):
+5. You are now ready to run inference. Placing the confidence_model and score_model folders into your DiffDockVdW directory will allow inference to be run with the following command (within a sbatch file; ensure your chosen partition has a gpu available):
 
 ```
 # Example inference command
@@ -94,23 +94,120 @@ Furthermore, the additional inference options can be found around line 60 in inf
 4. Evaluation
 
 ### Obtaining the HiQBind-corrected PDBBindv2020 dataset
-1. Obtain the subsetted INDEX_general_PLSubset.2020 file which we provide as helper_files/INDEX_filtered_no_overlap.2020 
+1. Obtain the subsetted INDEX_general_PLSubset.2020 file which we provide as helper_files/INDEX_filtered_no_overlap.2020 (PDB-wide collection of binding data: current status of the PDBbind database, Liu _et al._ 2015)
 2. Perform steps 2a and 3 (under the ''Alternatively, for processing PDBBind, use these codes instead'') from [HiQBind's How to reconstruct HiQBind and Optimized PDBBind Section](https://github.com/THGLab/HiQBind#how-to-reconstruct-hiqbind-and-optimized-pdbbind), making sure to replace ''INDEX_general_PLSubset.2020'' with ''INDEX_filtered_no_overlap.2020''
 3.  We provide a helper file helper_files/hiqbind_for_diffdock.py that will help convert the output of these steps into a DiffDock-ready format.
 <!-- INDEX_general_PLSubset.2020 file from the official PDBBind website and subset it so that it only includes the complexes from data/splits/timesplit_no_lig_overlap_train, data/splits/timesplit_no_lig_overlap_val, and data/splits/timesplit_test -->
+Ideally, the data format should look like:
+```
+refined_pdb_data/
+├── 1o3c/
+│   ├── 1o3c_ligand.sdf
+│   └── 1o3c_protein_processed.pdb
+├── other_pdb_codes...
+```
 ### Training the score model
-There are a lot of fine details here, but below are a few key details that should ease the process.
+There are a lot of fine details here, but below are a few key details worth mentioning
 1. utils/parsing.py includes all of the training arguments. While many of these are not too important, a couple of them are vital and easy to miss. Here a few notable ones:
-    a. `--vdw_base`, `--vdw_curv`, `--vdw_vol`: These are store_true flags that tell the model which vdw features to use. Any combination may be used, including 0 of them
-    b. `--dropout`: This is the neuron dropout that prevents overfitting; its default is 0, but it is highly recommended to use a value of at least 0.1
-    c. Continue list
+    - **a.** `--vdw_base`, `--vdw_curv`, `--vdw_vol`: These are store_true flags that tell the model which VdW features to encode (any combination may be used). Seperate cache directories will be created for each attempt at creating a different combination. Furthermore, if any of these flags are used, the `all_atoms` flag is automatically set to true as the vdw features are not implemented for the course grained model.
+    - **b.** `--dropout`: This is the MLP neuron dropout rate. It's default is 0.0, but to avoid overfitting of the model, it is highly recommended to use at least 0.1 for this parameter.
+    - **c.** `--restart_dir`, `--restart_ckpt`; `save_model_freq`: As with any large model training procedure, it is recommended to checkpoint your model every so often. We noticed that `save_model_freq` does not actually save the optimizer state, so if you wished to restart training from a specific epoch, you would be out of luck as the program would throw an error and default to restarting from the most previous checkpoint. To this end, we implemented a store_true flag `save_optim` that ensures the optimizer states are saved each time model weights are checkpointed. This proved to be an astronomical time save as we noticed the all atom models we were training had a decent chance to derail to numeric instability after following a poor gradient. 
+2. Below is the command we used to train our top VdW score model (ensure partition has gpu available).
+```
+SIF=singularity/DiffDockHPC.sif
+BIND_DIR=$PWD
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python train.py \
+    --split_train data/hiqbindsplits/refined_timesplit_train \
+    --split_val data/hiqbindsplits/refined_timesplit_val \
+    --split_test data/hiqbindsplits/refined_timesplit_test \
+    --pdbbind_dir PATH_TO_DATA \
+    --cache_path PATH_YOU_WANT_COMPLEXES_CACHED \
+    --n_epochs 210 \
+    --run_name ENTER_YOUR_RUN_NAME_HERE \
+    --batch_size 16 \
+    --save_model_freq 10 \
+    --val_inference_freq 10 \
+    --num_inference_complexes 200 \
+    --inference_samples 20 \
+    --scheduler plateau \
+    --scheduler_patience 20 \
+    --dropout 0.1 \
+    --receptor_radius 30.0 \
+    --atom_radius 5.0 \
+    --use_ema \
+    --limit_complexes 0 \
+    --c_alpha_max_neighbors 12 \
+    --atom_max_neighbors 16 \
+    --all_atoms \
+    --vdw_base \
+    --vdw_curv \
+    --vdw_vol \
+    --num_conv_layers 4 \
+    --ns 16 \
+    --nv 8 \
+    --use_second_order_repr \
+    --distance_embed_dim 64 \
+    --cross_distance_embed_dim 64 \
+    --cross_max_distance 30 \
+    --cudnn_benchmark \
+    --log_dir PATH_YOU_WANT_YOUR_MODELS_SAVED
+```
 
 ### Training the confidence model
 Similar to the score model, there are a lot of key training arguments that can easily be glossed over.
 1. The train arguments for training the confidence model can be found at line 25 of confidence_train.py
 2. Key notes: the confidence model can actually use an entirely different set of configurations and number of vdw features than the trained score model. The only time you will get errors in this manner is if you make a change to how data should be pre-processed but still used the old data cache. Furthermore, the flags `--vdw_base`, `--vdw_curv`, `--vdw_vol` are once again present to allow for any combination of vdw features
-3. Once again, confidence_dropout has a default of 0.0 and is highly recommended to be at least 0.1
-
+3. Once again, `confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
+4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model.
+```
+SIF=singularity/DiffDockHPC.sif
+BIND_DIR=$PWD
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python confidence_train.py \
+    --original_model_dir YOUR_SCORE_MODEL_PATH/RUN_NAME \
+    --use_original_model_cache \
+    --ckpt best_ema_inference_epoch_model.pt \
+    --model_save_frequency 15 \
+    --best_model_save_frequency 5 \
+    --run_name YOUR_RUN_NAME_FOR_CONFIDENCE_MODEL \
+    --split_train data/hiqbindsplits/refined_timesplit_train \
+    --split_val data/hiqbindsplits/refined_timesplit_val \
+    --cache_path PATH_YOU_WANT_INFERENCE_SAMPLES_CACHED \
+    --inference_steps 20 \
+    --samples_per_complex 16 \
+    --log_dir PATH_YOU_WANT_CONFIDENCE_MODELS_SAVED \
+    --batch_size 16 \
+    --lr 0.0003 \
+    --scheduler plateau \
+    --scheduler_patience 20 \
+    --n_epochs 75 \
+    --receptor_radius 30.0 \
+    --atom_radius 5.0 \
+    --limit_complexes 0 \
+    --c_alpha_max_neighbors 12 \
+    --atom_max_neighbors 16 \
+    --all_atoms \
+    --num_conv_layers 4 \
+    --ns 16 \
+    --nv 6 \
+    --distance_embed_dim 64 \
+    --cross_distance_embed_dim 64 \
+    --use_second_order_repr \
+    --cross_max_distance 30 \
+    --confidence_dropout 0.1 \
+    --vdw_base \
+    --vdw_curv \
+    --vdw_vol 
+```
 
 ## License
 MIT
