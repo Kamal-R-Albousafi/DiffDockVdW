@@ -1,27 +1,32 @@
-# DiffDockHPC
-DiffDockHPC is a fork of [DiffDock](https://github.com/gcorso/DiffDock), which adds support to run DiffDock on HPC systems using Singularity and Slurm.  
-DiffDockHPC has been developed to be part of a consensus docking protocol: [ESSENCE-Dock](https://pubs.acs.org/doi/abs/10.1021/acs.jcim.3c01982).  
-For more details about DiffDock itself, we refer to the [DiffDock Github](https://github.com/gcorso/DiffDock) and the [Paper on arXiv](https://arxiv.org/abs/2210.01776).
-DiffDockHPC current version matches to DiffDock v1.1 ([DiffDock-L](https://arxiv.org/abs/2402.18396)).  
-**Note:** If you update from DiffDockHPC v1.0, it is highly recommended to perform a clean install.  
+# DiffDock-VdW
+DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessing algorithm to include VdW features at the atom-node level. We provide the code and some examples of how to make use of DiffDockHPC to leverage High Performance Computing clusters and slurm. Furthermore, DiffDock-VdW is a fork of [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) which provides users HPC DiffDock functionality through Singularity and Slurm. Further, DiffDockHPC is itself a fork of [DiffDock](https://github.com/gcorso/DiffDock).
 
-DiffDockHPC is also available for the original DiffDock v1.0 implementation. This version was used in the original [ESSENCE-Dock](https://pubs.acs.org/doi/abs/10.1021/acs.jcim.3c01982) paper.
-In case you want to work with DiffDockHPC using the DiffDock 1.0 implementation, you can clone the project, and use `git checkout DiffDockHPCv1.0`.
+## The Organization of the Information Below
+1. Requirements
+2. Running DiffDock-VdW using our VdW models
+3. Reproducing our procedure (Data preprocessing with HiQBind -> Model Training -> Model Validation)
+4. Examples of srun commands (inference and train/evaluation)
 
-### Requirements:
+## 1. Requirements
+### Software Requirements:
 * Singularity 
-* Slurm (There is a --no_slurm mode, but using Slurm is highly recommended)
+* Slurm* (Though not required, our examples will make use of it)
 
+### Hardware Requirements
+* **Inference:** Run-time execution is lightweight and compatible with standard modern GPUs.
+* **Training Replication:** Reproducing the full ablation study requires a minimum of **80GB VRAM** (e.g., NVIDIA A100 80GB).
+
+## 2. Running our DiffDock-VdW models
 ### Installation instructions:
 1. Clone the repository and navigate to it
     ```
-    git clone https://github.com/Jnelen/DiffDockHPC
+    git clone https://github.com/Kamal-R-Albousafi/DiffDockVdW
     ```
    ```
-   cd DiffDockHPC
+   cd DiffDockVdW
    ```
    
-2. Run a test example to automatically download the Singularity image (~3 GB) and to generate the necessary cache look-up tables for SO(2) and SO(3) distributions. (This only needs to happen once and usually takes around 15 minutes).  
+2. **Install the Singularity image**. There are multiple methods of doing this. From [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC): Run a test example to automatically download the Singularity image (~3 GB) and to generate the necessary cache look-up tables for SO(2) and SO(3) distributions. (This only needs to happen once and usually takes around 15 minutes).  
    The `--no_slurm` flag is optional here, but makes it easier to track the progress.   
    ```
    python inferenceVS.py -p data/1a0q/1a0q_protein_processed.pdb -l data/1a0q/ -out TEST -j 1 --no_slurm
@@ -30,60 +35,179 @@ In case you want to work with DiffDockHPC using the DiffDock 1.0 implementation,
    ```
    python inferenceVS.py -p data/1a0q/1a0q_protein_processed.pdb -l data/1a0q/ -out TEST -j 1 -gpu --no_slurm
    ```  
-You can also download the Singularity image manually:
+[DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) additionally provides a method to manually download the Singularity image:
    ```
    wget --no-check-certificate -r "https://drive.usercontent.google.com/download?id=1TsbuhNWA74AHfIbKV5uh2lmEnD99VlCD&confirm=t" -O singularity/DiffDockHPC.sif
    ```
    
-   alternatively, you can build the singularity image yourself using:
+   Likewise, you can build the singularity image yourself using:
    ```
    singularity build singularity/DiffDockHPC.sif singularity/DiffDockHPC.def
    ```
-### Options
 
-The main file to use is `inferenceVS.py`. It has the following options/flags:  
+<!--
+   Optionally, if you intend on running many jobs in quick succession (i.e. debugging or preliminary jobs), you can sandbox the singularity image (There are examples of jobs with using both the sif and the sandbox in the examples section below) :
+   ```
+   singularity build --sandbox singularity/DiffDockHPC DiffDockHPC.sif
+   ```
+-->
 
-- `-p`, `-r`, `--protein_path`: 
-  Path to the protein/receptor `.pdb` file.
+3. Note: When training the models (or running inference without inferenceVS), you must bind the batchnorm fix from the mye3nn folder to the singularity image. The srun examples below demonstrate this fix in greater detail.
 
-- `-l`, `--ligand`: 
-  The path to the directory of (separate) `mol2`/`sdf` ligand files.
+4. Download and unzip our model weights: [Download weights](https://github.com/Kamal-R-Albousafi/DiffDockVdW/releases/download/v1.1.3/diffdockvdw_models.tar.gz)
 
-- `--protein_ligand_csv`: 
-  The path to a protein_ligand_csv file. Format and header should be like the following: complex_name,protein_path,ligand_description.
-  
-- `-o`, `--out`, `--out_dir`: 
-  Directory where the output structures will be saved to.
+   You can also download them using wget to place them directly onto your compute cluster:
+   ```
+   wget https://github.com/Kamal-R-Albousafi/DiffDockVdW/releases/download/v1.1.3/diffdockvdw_models.tar.gz
+   ```
+5. You are now ready to run inference. Placing the confidence_model and score_model folders into your DiffDockVdW directory will allow inference to be run with the following command (within a sbatch file; ensure your chosen partition has a gpu available):
 
-- `-j`, `--jobs`: 
-  Number of jobs to use.
+```
+# Example inference command
+cd DiffDockVdW
+SIF=singularity/DiffDockHPC.sif
+BIND_DIR=$PWD
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python inference.py \
+        --protein_ligand_csv data/your_protein_ligand.csv \
+        --model_dir score_model \
+        --ckpt best_ema_inference_epoch_model.pt \
+        --confidence_model_dir confidence_model \
+        --confidence_ckpt best_model_epoch75.pt \
+        --out_dir $RES_DIR/activators \
+        --samples_per_complex 20 \
+        --inference_steps 20 \
+        --actual_steps 19 \
+        --batch_size 20
+```
+Furthermore, the additional inference options can be found around line 60 in inference.py. As an additional note, if you are running inference with a model you trained with a different combination of vdw features, model_parameters.yml will track which ones you used; therefore, no vdw flags need to be used to run inference.py.
 
-- `-qu`, `--queue`: 
-  On which node to launch the slurm jobs. The default value is the default queue for the user. Might need to be specified if there is no default queue configured.
+## 3. Reproducing our Results
+### Contents
+1. Obtaining the HiQBind-corrected PDBBindv2020 dataset
+2. Training the score model
+3. Training the confidence model
+4. Evaluation
 
-- `-m`, `--mem`: 
-  How much memory to use for each job. The default value is `4GB`.
+### Obtaining the HiQBind-corrected PDBBindv2020 dataset
+1. Obtain the subsetted INDEX_general_PLSubset.2020 file which we provide as helper_files/INDEX_filtered_no_overlap.2020 (PDB-wide collection of binding data: current status of the PDBbind database, Liu _et al._ 2015)
+2. Perform steps 2a and 3 (under the ''Alternatively, for processing PDBBind, use these codes instead'') from [HiQBind's How to reconstruct HiQBind and Optimized PDBBind Section](https://github.com/THGLab/HiQBind#how-to-reconstruct-hiqbind-and-optimized-pdbbind), making sure to replace ''INDEX_general_PLSubset.2020'' with ''INDEX_filtered_no_overlap.2020''
+3.  We provide a helper file helper_files/hiqbind_for_diffdock.py that will help convert the output of these steps into a DiffDock-ready format.
+<!-- INDEX_general_PLSubset.2020 file from the official PDBBind website and subset it so that it only includes the complexes from data/splits/timesplit_no_lig_overlap_train, data/splits/timesplit_no_lig_overlap_val, and data/splits/timesplit_test -->
+Ideally, the data format should look like:
+```
+refined_pdb_data/
+├── 1o3c/
+│   ├── 1o3c_ligand.sdf
+│   └── 1o3c_protein_processed.pdb
+├── other_pdb_codes...
+```
+### Training the score model
+There are a lot of fine details here, but below are a few key details worth mentioning
+1. utils/parsing.py includes all of the training arguments. While many of these are not too important, a couple of them are vital and easy to miss. Here a few notable ones:
+    - **a.** `--vdw_base`, `--vdw_curv`, `--vdw_vol`: These are store_true flags that tell the model which VdW features to encode (any combination may be used). Seperate cache directories will be created for each attempt at creating a different combination. Furthermore, if any of these flags are used, the `all_atoms` flag is automatically set to true as the vdw features are not implemented for the course grained model.
+    - **b.** `--dropout`: This is the MLP neuron dropout rate. It's default is 0.0, but to avoid overfitting of the model, it is highly recommended to use at least 0.1 for this parameter.
+    - **c.** `--restart_dir`, `--restart_ckpt`; `save_model_freq`: As with any large model training procedure, it is recommended to checkpoint your model every so often. We noticed that `save_model_freq` does not actually save the optimizer state, so if you wished to restart training from a specific epoch, you would be out of luck as the program would throw an error and default to restarting from the most previous checkpoint. To this end, we implemented a store_true flag `save_optim` that ensures the optimizer states are saved each time model weights are checkpointed. This proved to be an astronomical time save as we noticed the all atom models we were training had a decent chance to derail to numeric instability after following a poor gradient. 
+2. Below is the command we used to train our top VdW score model (ensure partition has gpu available).
+```
+SIF=singularity/DiffDockHPC.sif
+BIND_DIR=$PWD
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python train.py \
+    --split_train data/hiqbindsplits/refined_timesplit_train \
+    --split_val data/hiqbindsplits/refined_timesplit_val \
+    --split_test data/hiqbindsplits/refined_timesplit_test \
+    --pdbbind_dir PATH_TO_DATA \
+    --cache_path PATH_YOU_WANT_COMPLEXES_CACHED \
+    --n_epochs 210 \
+    --run_name ENTER_YOUR_RUN_NAME_HERE \
+    --batch_size 16 \
+    --save_model_freq 10 \
+    --val_inference_freq 10 \
+    --num_inference_complexes 200 \
+    --inference_samples 20 \
+    --scheduler plateau \
+    --scheduler_patience 20 \
+    --dropout 0.1 \
+    --receptor_radius 30.0 \
+    --atom_radius 5.0 \
+    --use_ema \
+    --limit_complexes 0 \
+    --c_alpha_max_neighbors 12 \
+    --atom_max_neighbors 16 \
+    --all_atoms \
+    --vdw_base \
+    --vdw_curv \
+    --vdw_vol \
+    --num_conv_layers 4 \
+    --ns 16 \
+    --nv 8 \
+    --use_second_order_repr \
+    --distance_embed_dim 64 \
+    --cross_distance_embed_dim 64 \
+    --cross_max_distance 30 \
+    --cudnn_benchmark \
+    --log_dir PATH_YOU_WANT_YOUR_MODELS_SAVED
+```
 
-- `-gpu`, `--gpu`: 
-  Use GPU resources. This will accelerate docking calculations if a compatible GPU is available.
-
-- `-c`, `--cores`: 
-  How many cores to use for each job. The default value is `1` when used with the GPU option enabled, otherwise it defaults to `4` cores.
-
-- `-n`, `--num_outputs`: 
-  How many structures to output per compound. The default value is `1`.
-
-- `--remove_hs`: 
-  Remove the hydrogens in the final output structures.
-  
-- `--no_slurm`: 
-  Don't use slurm to handle the resources. This will run all samples on 1 GPU. Other Slurm arguments such as the amount memory, time limit, ... will also be ignored. The amount of CPU cores will still be set.
-
-- `--config`: 
-  Path to the config file you want to use. Defaults to `default_inference_args.yaml`
-
-- `-h`, `--help`: 
-  Show the help message and exit.
+### Training the confidence model
+Similar to the score model, there are a lot of key training arguments that can easily be glossed over.
+1. The train arguments for training the confidence model can be found at line 25 of confidence_train.py
+2. Key notes: the confidence model can actually use an entirely different set of configurations and number of vdw features than the trained score model. The only time you will get errors in this manner is if you make a change to how data should be pre-processed but still used the old data cache. Furthermore, the flags `--vdw_base`, `--vdw_curv`, `--vdw_vol` are once again present to allow for any combination of vdw features
+3. Once again, `confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
+4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model.
+```
+SIF=singularity/DiffDockHPC.sif
+BIND_DIR=$PWD
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python confidence_train.py \
+    --original_model_dir YOUR_SCORE_MODEL_PATH/RUN_NAME \
+    --use_original_model_cache \
+    --ckpt best_ema_inference_epoch_model.pt \
+    --model_save_frequency 15 \
+    --best_model_save_frequency 5 \
+    --run_name YOUR_RUN_NAME_FOR_CONFIDENCE_MODEL \
+    --split_train data/hiqbindsplits/refined_timesplit_train \
+    --split_val data/hiqbindsplits/refined_timesplit_val \
+    --cache_path PATH_YOU_WANT_INFERENCE_SAMPLES_CACHED \
+    --inference_steps 20 \
+    --samples_per_complex 16 \
+    --log_dir PATH_YOU_WANT_CONFIDENCE_MODELS_SAVED \
+    --batch_size 16 \
+    --lr 0.0003 \
+    --scheduler plateau \
+    --scheduler_patience 20 \
+    --n_epochs 75 \
+    --receptor_radius 30.0 \
+    --atom_radius 5.0 \
+    --limit_complexes 0 \
+    --c_alpha_max_neighbors 12 \
+    --atom_max_neighbors 16 \
+    --all_atoms \
+    --num_conv_layers 4 \
+    --ns 16 \
+    --nv 6 \
+    --distance_embed_dim 64 \
+    --cross_distance_embed_dim 64 \
+    --use_second_order_repr \
+    --cross_max_distance 30 \
+    --confidence_dropout 0.1 \
+    --vdw_base \
+    --vdw_curv \
+    --vdw_vol 
+```
 
 ## License
 MIT
