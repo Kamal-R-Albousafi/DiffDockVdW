@@ -4,8 +4,8 @@ import shutil
 from pathlib import Path
 
 # Placeholder paths
-raw_data_path = Path('/path/to/your/raw_data').resolve()
-refined_base_path = Path('/path/you/want/your/refined_data').resolve()
+raw_data_path = Path('/path/to/your/raw_data').resolve() # path to your HIQBind complexes
+refined_base_path = Path('/path/you/want/your/refined_data').resolve() # desired output location
 
 # This can be adjusted to be finer or less restrictive
 resolution_threshold = 2.5
