@@ -93,8 +93,23 @@ Furthermore, the additional inference options can be found around line 60 in inf
 4. Evaluation
 
 ### Obtaining the HiQBind-corrected PDBBindv2020 dataset
-1. Obtain the INDEX_general_PL.2020 file from the official [PDBBind website](https://www.pdbbind-plus.org.cn/download) (you will need to create an account to download data) and place the file in an accessible location, preferably under `/helperfiles/`
-2. Run the following command to obtain the INDEX_filtered_no_overlap.2020 file.
+1. Obtain the INDEX_general_PL.2020 file from the official [PDBBind website](https://www.pdbbind-plus.org.cn/download) (you will need to create an account to download data) and place the file in an accessible location, preferably under `/helperfiles/`. Below is an image detailing which folder to download. 
+<img src="ReadMePDBBind.png" width="700"/>
+
+The downloaded folder `v2020Index` will have the following structure:
+```
+v2020Index/
+├── index/
+|   ├── 2020_index.lst
+|   ├── INDEX_general_NL.2020
+|   ├── INDEX_general_PL_data.2020
+|   ├── INDEX_general_PL_name.2020
+|   ├── INDEX_general_PL.2020       <--- This is the required file
+|   ├── other_files...
+└── readme/
+```
+
+3. Run the following command to obtain the INDEX_filtered_no_overlap.2020 file.
 ```
 cd DiffDockVdW
 python helper_files/v2020filter.py
