@@ -1,11 +1,10 @@
 # DiffDock-VdW
-DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessing algorithm to include VdW features at the atom-node level. We provide the code and some examples of how to make use of DiffDockHPC to leverage High Performance Computing clusters and slurm. Furthermore, DiffDock-VdW is a fork of [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) which provides users HPC DiffDock functionality through Singularity and Slurm. Further, DiffDockHPC is itself a fork of [DiffDock](https://github.com/gcorso/DiffDock).
+DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessing algorithm to include VdW features at the atom-node level. Specifically, DiffDock-VdW is a fork of [DiffDockHPC](https://github.com/Jnelen/DiffDockHPC) (a fork of [DiffDock](https://github.com/gcorso/DiffDock)) which provides users HPC DiffDock functionality through Singularity and Slurm.
 
 ## The Organization of the Information Below
 1. Requirements
 2. Running DiffDock-VdW using our VdW models
 3. Reproducing our procedure (Data preprocessing with HiQBind -> Model Training -> Model Validation)
-4. Examples of srun commands (inference and train/evaluation)
 
 ## 1. Requirements
 ### Software Requirements:
@@ -94,10 +93,15 @@ Furthermore, the additional inference options can be found around line 60 in inf
 4. Evaluation
 
 ### Obtaining the HiQBind-corrected PDBBindv2020 dataset
-1. Obtain the subsetted INDEX_general_PLSubset.2020 file which we provide as helper_files/INDEX_filtered_no_overlap.2020 (PDB-wide collection of binding data: current status of the PDBbind database, Liu _et al._ 2015)
-2. Perform steps 2a and 3 (under the ''Alternatively, for processing PDBBind, use these codes instead'') from [HiQBind's How to reconstruct HiQBind and Optimized PDBBind Section](https://github.com/THGLab/HiQBind#how-to-reconstruct-hiqbind-and-optimized-pdbbind), making sure to replace ''INDEX_general_PLSubset.2020'' with ''INDEX_filtered_no_overlap.2020''
-3.  We provide a helper file helper_files/hiqbind_for_diffdock.py that will help convert the output of these steps into a DiffDock-ready format.
-<!-- INDEX_general_PLSubset.2020 file from the official PDBBind website and subset it so that it only includes the complexes from data/splits/timesplit_no_lig_overlap_train, data/splits/timesplit_no_lig_overlap_val, and data/splits/timesplit_test -->
+1. Obtain the INDEX_general_PL.2020 file from the official [PDBBind website](https://www.pdbbind-plus.org.cn/download) (you will need to create an account to download data) and place the file in an accessible location, preferably under `/helperfiles/`
+2. Run the following command to obtain the INDEX_filtered_no_overlap.2020 file.
+```
+cd DiffDockVdW
+python helper_files/v2020filter.py
+```
+3. Perform steps 2a and 3 (under the header ''Alternatively, for processing PDBBind, use these codes instead'') from [HiQBind's How to reconstruct HiQBind and Optimized PDBBind Section](https://github.com/THGLab/HiQBind#how-to-reconstruct-hiqbind-and-optimized-pdbbind), making sure to replace ''INDEX_general_PL.2020'' with ''INDEX_filtered_no_overlap.2020''. It should be noted that these files will take up a lot of space and therefore should be placed in a location with adequate (50GB+) storage. 
+4.  We provide a helper file helper_files/hiqbind_for_diffdock.py that will convert the output of these steps into a DiffDock-ready format. Note that the placeholder file names for `raw_data_path` and `refined_base_path` will need to be replaced.
+
 Ideally, the data format should look like:
 ```
 refined_pdb_data/
@@ -107,12 +111,12 @@ refined_pdb_data/
 ├── other_pdb_codes...
 ```
 ### Training the score model
-There are a lot of fine details here, but below are a few key details worth mentioning
+There are a lot of fine details here, but below are a few key details of particular importance:
 1. utils/parsing.py includes all of the training arguments. While many of these are not too important, a couple of them are vital and easy to miss. Here a few notable ones:
     - **a.** `--vdw_base`, `--vdw_curv`, `--vdw_vol`: These are store_true flags that tell the model which VdW features to encode (any combination may be used). Seperate cache directories will be created for each attempt at creating a different combination. Furthermore, if any of these flags are used, the `all_atoms` flag is automatically set to true as the vdw features are not implemented for the course grained model.
     - **b.** `--dropout`: This is the MLP neuron dropout rate. It's default is 0.0, but to avoid overfitting of the model, it is highly recommended to use at least 0.1 for this parameter.
     - **c.** `--restart_dir`, `--restart_ckpt`; `save_model_freq`: As with any large model training procedure, it is recommended to checkpoint your model every so often. We noticed that `save_model_freq` does not actually save the optimizer state, so if you wished to restart training from a specific epoch, you would be out of luck as the program would throw an error and default to restarting from the most previous checkpoint. To this end, we implemented a store_true flag `save_optim` that ensures the optimizer states are saved each time model weights are checkpointed. This proved to be an astronomical time save as we noticed the all atom models we were training had a decent chance to derail to numeric instability after following a poor gradient. 
-2. Below is the command we used to train our top VdW score model (ensure partition has gpu available).
+2. Below is the command we used to train our top VdW score model (ensure partition has gpu available). Note that `--cache_path`, `--run_name`, and `--log_dir` each have placeholder names.
 ```
 SIF=singularity/DiffDockHPC.sif
 BIND_DIR=$PWD
@@ -163,7 +167,7 @@ Similar to the score model, there are a lot of key training arguments that can e
 1. The train arguments for training the confidence model can be found at line 25 of confidence_train.py
 2. Key notes: the confidence model can actually use an entirely different set of configurations and number of vdw features than the trained score model. The only time you will get errors in this manner is if you make a change to how data should be pre-processed but still used the old data cache. Furthermore, the flags `--vdw_base`, `--vdw_curv`, `--vdw_vol` are once again present to allow for any combination of vdw features
 3. Once again, `confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
-4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model.
+4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model. Furthermore, `--original_model_dir`, `run_name`, `--cache_path`, and `--log_dir` each have placeholder names.
 ```
 SIF=singularity/DiffDockHPC.sif
 BIND_DIR=$PWD
