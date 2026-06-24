@@ -181,8 +181,8 @@ srun singularity run --nv \
 Similar to the score model, there are a lot of key training arguments that can easily be glossed over.
 1. The train arguments for training the confidence model can be found at line 25 of confidence_train.py
 2. Key notes: the confidence model can actually use an entirely different set of configurations and number of vdw features than the trained score model. The only time you will get errors in this manner is if you make a change to how data should be pre-processed but still used the old data cache. Furthermore, the flags `--vdw_base`, `--vdw_curv`, `--vdw_vol` are once again present to allow for any combination of vdw features
-3. Once again, `confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
-4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model. Furthermore, `--original_model_dir`, `run_name`, `--cache_path`, and `--log_dir` each have placeholder names.
+3. Once again, `--confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
+4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model. Furthermore, `--original_model_dir`, --`run_name`, `--cache_path`, and `--log_dir` each have placeholder names.
 ```
 SIF=singularity/DiffDockHPC.sif
 BIND_DIR=$PWD
