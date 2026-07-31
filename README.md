@@ -130,14 +130,20 @@ There are a lot of fine details here, but below are a few key details of particu
 1. utils/parsing.py includes all of the training arguments. While many of these are not too important, a couple of them are vital and easy to miss. Here a few notable ones:
     - **a.** `--vdw_base`, `--vdw_curv`, `--vdw_vol`: These are store_true flags that tell the model which VdW features to encode (any combination may be used). Seperate cache directories will be created for each attempt at creating a different combination. Furthermore, if any of these flags are used, the `all_atoms` flag is automatically set to true as the vdw features are not implemented for the course grained model.
     - **b.** `--dropout`: This is the MLP neuron dropout rate. It's default is 0.0, but to avoid overfitting of the model, it is highly recommended to use at least 0.1 for this parameter.
-    - **c.** `--restart_dir`, `--restart_ckpt`; `save_model_freq`: As with any large model training procedure, it is recommended to checkpoint your model every so often. We noticed that `save_model_freq` does not actually save the optimizer state, so if you wished to restart training from a specific epoch, you would be out of luck as the program would throw an error and default to restarting from the most previous checkpoint. To this end, we implemented a store_true flag `save_optim` that ensures the optimizer states are saved each time model weights are checkpointed. This proved to be an astronomical time save as we noticed the all atom models we were training had a decent chance to derail to numeric instability after following a poor gradient. 
-2. Below is the command we used to train our top VdW score model (ensure partition has gpu available). Note that `--cache_path`, `--run_name`, and `--log_dir` each have placeholder names.
+    - **c.** `--restart_dir`, `--restart_ckpt`; `save_model_freq`: As with any large model training procedure, it is recommended to checkpoint your model every so often. We noticed that `save_model_freq` does not actually save the optimizer state, so if you wished to restart training from a specific epoch, you would be out of luck as the program would throw an error and default to restarting from the most previous checkpoint. To this end, we implemented a store_true flag `save_optim` that ensures the optimizer states are saved each time model weights are checkpointed. This proved to be an astronomical time save as we noticed the all atom models we were training had a decent chance to derail to numeric instability after following a poor gradient.
+2. If your data is in a separate directory (outside of your DiffDockVdW directory), that directory needs to be bound to the singularity run command. If this is the case, you will need to add a `--bind $DATA_DIR:$DATA_DIR` command above the `python train.py` line; in this way, the `--pdbind_dir` argument would be `--pdbbind_dir $DATA_DIR`. 
+3. Below is the command we used to train our top VdW score model (ensure partition has gpu available). Note that `--cache_path`, `--run_name`, and `--log_dir` each have placeholder names.
 ```
+# Change the line below to match your directory to ensure $PWD logic works
+cd Path/To/Your/DiffDockVdW
+
+# DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
 SIF=singularity/DiffDockHPC.sif
-BIND_DIR=$PWD
 INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
 srun singularity run --nv \
-    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD:$PWD \
+    # if data is in other directory, uncomment the line below
+    # --bind $DATA_DIR:$DATA_DIR \
     --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
     $SIF \
     python train.py \
@@ -184,11 +190,16 @@ Similar to the score model, there are a lot of key training arguments that can e
 3. Once again, `--confidence_dropout` has a default of 0.0 and is highly recommended to be at least 0.1
 4. Below is the command we used to train our VdW confidence model. If your confidence model has the same preprocessing settings as your score model (this is highly recommended), the `--use_original_model_cache` will use the same complexes that were cached from when you trained your score model. Furthermore, `--original_model_dir`, `--run_name`, `--cache_path`, and `--log_dir` each have placeholder names.
 ```
+# Change the line below to match your directory to ensure $PWD logic works
+cd Path/To/Your/DiffDockVdW
+
+# DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
 SIF=singularity/DiffDockHPC.sif
-BIND_DIR=$PWD
 INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
 srun singularity run --nv \
-    --bind $BIND_DIR:$BIND_DIR,/scratch:/scratch\
+    --bind $PWD:$PWD \
+    # if data is in other directory, uncomment the line below
+    # --bind $DATA_DIR:$DATA_DIR \
     --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
     $SIF \
     python confidence_train.py \
@@ -227,6 +238,44 @@ srun singularity run --nv \
     --vdw_curv \
     --vdw_vol 
 ```
+
+### Running the evaluation script
+DiffDock provides a script that will perform inference on the test dataset and provide accuracy metrics under `evaluate.py`. We provide the command that was used to evaluate the models we trained below. Many of the arguments for this script can be left default; there are, however, some arguments other than file names that are included in the command below which are required to maintain consistency between training and inference (all numeric arguments such as `batch_size`, `matching_popsize`, and `inference_steps`). Additionally, we added logic for the metrics to be exported to a single csv file, which will be located in the directory specified by the `out_dir` argument. It should be noted that the generated complexes can be saved with the `--save_complexes` argument. If this argument is set, it is recommended to set the `complexes_save_path` to another folder within your output directory. For example if `--out_dir OUTPUT_DIR`, then `--complexes_save_path OUTPUT_DIR/graphs`.  
+```
+# Change the line below to match your directory to ensure $PWD logic works
+cd Path/To/Your/DiffDockVdW
+
+# DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
+SIF=singularity/DiffDockHPC.sif
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $PWD:$PWD \
+    # if data is in other directory, uncomment the line below
+    # --bind $DATA_DIR:$DATA_DIR \
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python evaluate.py \
+        --model_dir PATH_TO_SCORE_MODEL \
+        --ckpt best_ema_inference_epoch_model.pt \
+        --confidence_model_dir PATH_TO_CONFIDENCE_MODEL \
+        --confidence_ckpt best_model_epoch75.pt \
+        --run_name ENTER_EVALUATION_RUN_NAME \
+        --out_dir PATH_YOU_WANT_EVALUATION_RESULTS \
+        --batch_size 40 \
+        --matching_popsize 20 \
+        --matching_maxiter 20 \
+        --dataset pdbbind \
+        --cache_path PATH_YOU_WANT_TEST_COMPLEXES_CACHED \
+        --data_dir PATH_TO_ORIGINAL_DATA \
+        --split_path data/hiqbindsplits/refined_timesplit_test \
+        --inference_steps 20 \
+        --tqdm \
+        --samples_per_complex 20 \
+        --actual_steps 19 \
+        --split test \
+        --limit_failures 15
+```
+
 
 ## License
 MIT
