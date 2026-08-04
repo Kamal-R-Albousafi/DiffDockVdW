@@ -1,0 +1,13 @@
+complex_name,protein_path,ligand_description,protein_sequence
+CID_10647785,data/protein_3mt6_ab.pdb,CC1(C=CC2=C(O1)C=CC3=C2NC(=O)[C@@]34[C@@H]([C@]56[C@H](C4(C)C)C[C@@]7(CCCN7C5=O)C(=O)N6)O)C,
+CID_124085867,data/protein_3mt6_ab.pdb,C1CN(CC2=C1N3CCN=C3N(C2=O)CC4=CC=C(C=C4)C(F)(F)F)CC5=CC=CC=C5,
+CID_155518541,data/protein_3mt6_ab.pdb,CC(C)(C(=O)N1CCN(CC1)CC2=CC=C(C=C2)Cl)S(=O)(=O)C3=NC=C(C=C3)C(F)(F)F,
+CID_171936241,data/protein_3mt6_ab.pdb,CC(C)(C(=O)NCCSC1=CC=CC=C1C(F)(F)F)P(=O)(C2=NC=C(C=C2)C(F)(F)F)C3=NC=C(C=C3)C(F)(F)F,
+CID_177378272,data/protein_3mt6_ab.pdb,CC(C)(C(=O)NCCSC1=CC=CC=C1Cl)P(=O)(C2=CC=C(C=C2)C(F)(F)F)C3=CC=C(C=C3)C(F)(F)F,
+CID_177378273,data/protein_3mt6_ab.pdb,CC(C(=O)NCCSC1=CC=CC=C1C(F)(F)F)P(=O)(C2=CC=C(C=C2)C(F)(F)F)C3=CC=C(C=C3)C(F)(F)F,
+CID_177378274,data/protein_3mt6_ab.pdb,CC(C)(C(=O)NCCSC1=CC=CC=C1C(F)(F)F)P(=O)(C2=CC=C(C=C2)C(F)(F)F)C3=CC=C(C=C3)C(F)(F)F,
+CID_177378275,data/protein_3mt6_ab.pdb,CC(C)(C(=O)NCCSC1=CC=CC=C1Br)P(=O)(C2=CC=C(C=C2)C(F)(F)F)C3=CC=C(C=C3)C(F)(F)F,
+CID_177378276,data/protein_3mt6_ab.pdb,CC(C)(C(=O)NCCSC1=CC=CC=C1C(F)(F)F)P(=O)(C2=CC=CC=N2)C3=CC=CC=N3,
+CID_177378277,data/protein_3mt6_ab.pdb,C1=CC=C(C(=C1)C(F)(F)F)SCCNC(=O)CP(=O)(C2=NC=C(C=C2)C(F)(F)F)C3=NC=C(C=C3)C(F)(F)F,
+CID_177378278,data/protein_3mt6_ab.pdb,CC(C(=O)NCCSC1=CC=CC=C1C(F)(F)F)P(=O)(C2=NC=C(C=C2)C(F)(F)F)C3=NC=C(C=C3)C(F)(F)F,
+CID_51689223,data/protein_3mt6_ab.pdb,CCOC(=O)[C@H]1[C@@H](C[C@@](CC1=O)(C2=CC=C(C=C2)Br)O)C=C(Cl)Cl,
