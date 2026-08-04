@@ -4,7 +4,7 @@ DiffDock-VdW is a feature augmentation of DiffDock that updates the preprocessin
 ## The Organization of the Information Below
 1. Requirements
 2. Running DiffDock-VdW using our VdW models
-3. Reproducing our procedure (Data preprocessing with HiQBind -> Model Training -> Model Validation)
+3. Reproducing our procedure (Data preprocessing with HiQBind -> Model Training -> Model Evaluation & ClpP Case Study)
 
 ## 1. Requirements
 ### Software Requirements:
@@ -138,12 +138,12 @@ There are a lot of fine details here, but below are a few key details of particu
 cd Path/To/Your/DiffDockVdW
 
 # DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
+# If above is uncommented, make sure to bind the directory before $SIF gets called below: --bind $DATA_DIR:$DATA_DIR \
+
 SIF=singularity/DiffDockHPC.sif
 INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
 srun singularity run --nv \
     --bind $PWD:$PWD \
-    # if data is in other directory, uncomment the line below
-    # --bind $DATA_DIR:$DATA_DIR \
     --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
     $SIF \
     python train.py \
@@ -180,7 +180,7 @@ srun singularity run --nv \
     --cross_distance_embed_dim 64 \
     --cross_max_distance 30 \
     --cudnn_benchmark \
-    --log_dir PATH_YOU_WANT_YOUR_MODELS_SAVED
+    --log_dir PATH_TO_SAVE_TRAINED_SCORE_MODELS
 ```
 
 ### Training the confidence model
@@ -194,16 +194,16 @@ Similar to the score model, there are a lot of key training arguments that can e
 cd Path/To/Your/DiffDockVdW
 
 # DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
+# If above is uncommented, make sure to bind the directory before $SIF gets called below: --bind $DATA_DIR:$DATA_DIR \
+
 SIF=singularity/DiffDockHPC.sif
 INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
 srun singularity run --nv \
     --bind $PWD:$PWD \
-    # if data is in other directory, uncomment the line below
-    # --bind $DATA_DIR:$DATA_DIR \
     --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
     $SIF \
     python confidence_train.py \
-    --original_model_dir YOUR_SCORE_MODEL_PATH/RUN_NAME \
+    --original_model_dir PATH_TO_TRAINED_SCORE_MODEL_FOLDER \
     --use_original_model_cache \
     --ckpt best_ema_inference_epoch_model.pt \
     --model_save_frequency 15 \
@@ -240,24 +240,24 @@ srun singularity run --nv \
 ```
 
 ### Running the evaluation script
-DiffDock provides a script that will perform inference on the test dataset and provide accuracy metrics under `evaluate.py`. We provide the command that was used to evaluate the models we trained below. Many of the arguments for this script can be left default; there are, however, some arguments other than file names that are included in the command below which are required to maintain consistency between training and inference (all numeric arguments such as `batch_size`, `matching_popsize`, and `inference_steps`). Additionally, we added logic for the metrics to be exported to a single csv file, which will be located in the directory specified by the `out_dir` argument. It should be noted that the generated complexes can be saved with the `--save_complexes` argument. If this argument is set, it is recommended to set the `complexes_save_path` to another folder within your output directory. For example if `--out_dir OUTPUT_DIR`, then `--complexes_save_path OUTPUT_DIR/graphs`.  
+DiffDock provides a script that will perform inference on the test dataset and provide accuracy metrics under `evaluate.py`. We provide below the command that was used to evaluate the models we trained. Many of the arguments for this script can be left default; there are, however, some arguments other than file names that are included in the command below which are required to maintain consistency between training and inference (all numeric arguments such as `batch_size`, `matching_popsize`, and `inference_steps`). Additionally, we added logic for the metrics to be exported to a single csv file, which will be located in the directory specified by the `out_dir` argument. It should be noted that the generated complexes can be saved with the `--save_complexes` argument. If this argument is set, it is recommended to set the `complexes_save_path` to another folder within your output directory. For example if `--out_dir OUTPUT_DIR`, then `--complexes_save_path OUTPUT_DIR/graphs`.  
 ```
 # Change the line below to match your directory to ensure $PWD logic works
 cd Path/To/Your/DiffDockVdW
 
 # DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
+# If above is uncommented, make sure to bind the directory before $SIF gets called below: --bind $DATA_DIR:$DATA_DIR \
+
 SIF=singularity/DiffDockHPC.sif
 INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
 srun singularity run --nv \
     --bind $PWD:$PWD \
-    # if data is in other directory, uncomment the line below
-    # --bind $DATA_DIR:$DATA_DIR \
     --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
     $SIF \
     python evaluate.py \
-        --model_dir PATH_TO_SCORE_MODEL \
+        --model_dir PATH_TO_SCORE_MODEL_FOLDER \
         --ckpt best_ema_inference_epoch_model.pt \
-        --confidence_model_dir PATH_TO_CONFIDENCE_MODEL \
+        --confidence_model_dir PATH_TO_CONFIDENCE_MODEL_FOLDER \
         --confidence_ckpt best_model_epoch75.pt \
         --run_name ENTER_EVALUATION_RUN_NAME \
         --out_dir PATH_YOU_WANT_EVALUATION_RESULTS \
@@ -275,6 +275,35 @@ srun singularity run --nv \
         --split test \
         --limit_failures 15
 ```
+
+### ClpP Case Study
+We provide the 3mt6 E. Coli ClpP AB subunit pdb file as well as three separate csv files that contain, respectively, the smiles strings for the activator, inhibitor, and decoy ligands tested with our trained models. The csv files are under `data/clpp_casestudy` and the pdb file is contained in the `data/` folder. Below is the command we used to run inference on the ClpP-activating ligands; to run inference on the other classes, simply change the name of the csv file and ensure your output directory is set to a new unique subdirectory, i.e. `OUT_DIR/decoys`. To make the figures that show the diffusion process, the flag `--save_visualization` can be added, which saves a pdb file that includes the protein as well as 20 individual ligands for each diffusion step.
+```
+# Change the line below to match your directory to ensure $PWD logic works
+cd Path/To/Your/DiffDockVdW
+
+# DATA_DIR = PATH_TO_DATA_IF_IN_OTHER_DIRECTORY
+# If above is uncommented, make sure to bind the directory before $SIF gets called below: --bind $DATA_DIR:$DATA_DIR \
+
+SIF=singularity/DiffDockHPC.sif
+INTERNAL_PATH="/opt/conda/envs/DiffDockHPC/lib/python3.9/site-packages/e3nn/nn/_batchnorm.py"
+srun singularity run --nv \
+    --bind $PWD:$PWD \
+    --bind $PWD/mye3nn/fixed_batchnorm.py:$INTERNAL_PATH \
+    $SIF \
+    python inference.py \
+        --protein_ligand_csv data/clpp_casestudy/clpp_activators_smiles.csv \
+        --model_dir PATH_TO_SCORE_MODEL_FOLDER \
+        --ckpt best_ema_inference_epoch_model.pt \
+        --confidence_model_dir PATH_TO_CONFIDENCE_MODEL_FOLDER \
+        --confidence_ckpt best_model_epoch75.pt \
+        --out_dir $RES_DIR/activators \
+        --samples_per_complex 40 \
+        --inference_steps 20 \
+        --actual_steps 19 \
+        --batch_size 40 
+```
+
 
 
 ## License
